@@ -1,9 +1,25 @@
 import type { Metadata } from "next";
-import { GeistSans } from "geist/font/sans";
+import { Lexend, Bricolage_Grotesque } from "next/font/google";
 import { GeistMono } from "geist/font/mono";
 import "./globals.css";
 import { PagesProvider } from "@/lib/pages-context";
 import { Sidebar } from "@/components/Sidebar";
+
+// Body & UI: Lexend is engineered to improve reading proficiency and reduce
+// reading fatigue — a natural fit for a note-taking app aimed at students.
+const lexend = Lexend({
+  subsets: ["latin"],
+  variable: "--font-lexend",
+  display: "swap",
+});
+
+// Titles & headings: Bricolage Grotesque is bold and characterful but tidy,
+// giving pages that confident, well-organized "study notes" structure.
+const bricolage = Bricolage_Grotesque({
+  subsets: ["latin"],
+  variable: "--font-bricolage",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "Nest",
@@ -18,7 +34,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`dark h-full ${GeistSans.variable} ${GeistMono.variable}`}
+      className={`dark h-full ${lexend.variable} ${bricolage.variable} ${GeistMono.variable}`}
     >
       <body className="h-full font-sans antialiased">
         <PagesProvider>

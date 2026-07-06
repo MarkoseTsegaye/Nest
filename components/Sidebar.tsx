@@ -134,7 +134,7 @@ export function Sidebar() {
       <div className="px-4 h-12 flex items-center">
         <button
           onClick={() => router.push("/")}
-          className="text-[15px] font-bold tracking-tight text-foreground"
+          className="font-display text-base font-extrabold tracking-tight text-foreground"
         >
           Nest
         </button>

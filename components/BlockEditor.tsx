@@ -16,9 +16,9 @@ import {
 import type { Block, PageDetail } from "@/lib/types";
 
 const headingClasses: Record<number, string> = {
-  1: "text-2xl font-semibold",
-  2: "text-xl font-semibold",
-  3: "text-lg font-semibold",
+  1: "font-display text-2xl font-bold tracking-tight",
+  2: "font-display text-xl font-bold tracking-tight",
+  3: "font-display text-lg font-semibold tracking-tight",
 };
 
 function AutoTextarea({

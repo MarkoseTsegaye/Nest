@@ -80,7 +80,7 @@ export function PageView({ pageId }: { pageId: string }) {
           api.updatePage(pageId, { title: e.target.value || "Untitled" }).then(refreshSidebar);
         }}
         placeholder="Untitled"
-        className="w-full bg-transparent text-4xl font-bold tracking-tight outline-none placeholder:text-muted-foreground/40 mb-8"
+        className="w-full bg-transparent font-display text-4xl font-bold tracking-tight outline-none placeholder:text-muted-foreground/40 mb-8"
       />
 
       {page.isDatabase ? (
