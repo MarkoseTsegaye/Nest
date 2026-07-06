@@ -107,7 +107,8 @@
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
 
-  --font-sans: var(--font-geist-sans);
+  --font-sans: var(--font-lexend);
+  --font-display: var(--font-bricolage);
   --font-mono: var(--font-geist-mono);
 }
 
@@ -127,10 +128,12 @@
     text-rendering: optimizeLegibility;
   }
 
-  /* Apple-ish: tighten tracking as type gets larger and heavier. */
+  /* Titles use the display family (Bricolage Grotesque); tighten tracking as
+     type gets larger and heavier so headings read bold but organized. */
   h1,
   h2,
   h3 {
+    font-family: var(--font-display), var(--font-sans), sans-serif;
     letter-spacing: -0.02em;
   }
 

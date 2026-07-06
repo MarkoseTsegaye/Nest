@@ -16,8 +16,16 @@ chrome, add space, and let the type and content carry the page.
   via `@theme inline`. Dark values are under `.dark`; `<html>` carries the
   `dark` class (see `app/layout.tsx`). Never hard-code hex in components —
   always go through the token utilities below.
-- **Font**: Geist (via the `geist` package, applied in `app/layout.tsx`).
-  `--font-sans` → Geist Sans, `--font-mono` → Geist Mono. No Google-fonts fetch.
+- **Fonts** (applied in `app/layout.tsx` via `next/font/google`): a two-family
+  system tuned for students — bold, effortless to read, "organized study
+  notes" energy.
+  - `--font-sans` → **Lexend** (body & UI). Engineered to improve reading
+    proficiency and reduce reading fatigue — this is the default reading face.
+  - `--font-display` → **Bricolage Grotesque** (titles & headings). Bold and
+    characterful but tidy. Use it via the `font-display` utility on page
+    titles, heading blocks, and the wordmark; semantic `h1`/`h2`/`h3` also
+    inherit it from base CSS.
+  - `--font-mono` → Geist Mono (rarely used).
 - **Icons**: `lucide-react` only. **No emoji as UI icons.** Default icon size is
   16px (`size-4`), muted color, `1.5` stroke feel. Common ones here: `FileText`
   (page), `Table2`/`Database` (database page), `ChevronRight`/`ChevronDown`
@@ -52,11 +60,12 @@ Dark mode is deliberately near-black (`#0a0a0b` canvas) with soft off-white ink
 
 Apple-ish: generous weight, tight tracking on large text, restrained sizes.
 
-- Page title: `text-4xl font-bold tracking-tight` (headings already get
-  `letter-spacing: -0.02em` from base CSS — lean into it).
-- Section/heading blocks: `font-semibold`, sizes `text-2xl`/`text-xl`/`text-lg`
-  for heading levels 1/2/3.
-- Body / blocks: ~15px (`text-[15px]`), `leading-relaxed`.
+- Page title: `font-display text-4xl font-bold tracking-tight` (Bricolage;
+  headings also get `letter-spacing: -0.02em` from base CSS — lean into it).
+- Section/heading blocks: `font-display` + `font-bold`/`font-semibold`, sizes
+  `text-2xl`/`text-xl`/`text-lg` for heading levels 1/2/3, `tracking-tight`.
+- Body / blocks: Lexend, ~15px (`text-[15px]`), `leading-relaxed`. Let Lexend's
+  legibility carry long reading; don't shrink body text below ~14px.
 - Labels, table headers, metadata: `text-xs` or `text-[13px]`,
   `text-muted-foreground`, sometimes `font-medium`. Avoid ALL-CAPS unless it's a
   tiny eyebrow label; if used, add `tracking-wide`.
