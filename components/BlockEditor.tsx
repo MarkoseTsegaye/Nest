@@ -2,14 +2,22 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { FileText, Heading, Link2, Plus, Trash2, Type } from "lucide-react";
 import { api } from "@/lib/api-client";
 import { usePages } from "@/lib/pages-context";
 import { useDebouncedCallback } from "@/lib/use-debounced-callback";
+import { cn } from "@/lib/utils";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import type { Block, PageDetail } from "@/lib/types";
 
 const headingClasses: Record<number, string> = {
-  1: "text-2xl font-bold",
-  2: "text-xl font-bold",
+  1: "text-2xl font-semibold",
+  2: "text-xl font-semibold",
   3: "text-lg font-semibold",
 };
 
@@ -43,7 +51,10 @@ function AutoTextarea({
       placeholder={placeholder}
       onChange={(e) => onChange(e.target.value)}
       onBlur={onBlur}
-      className={`w-full resize-none outline-none overflow-hidden placeholder:text-gray-300 ${className ?? ""}`}
+      className={cn(
+        "w-full resize-none bg-transparent outline-none overflow-hidden placeholder:text-muted-foreground/40",
+        className
+      )}
     />
   );
 }
@@ -72,41 +83,43 @@ function BlockRow({
 
   if (block.type === "page_link") {
     return (
-      <div className="group flex items-center gap-2 py-1">
+      <div className="group flex items-center gap-1 py-0.5">
         <Link
           href={`/pages/${block.linkedPageId}`}
-          className="flex-1 flex items-center gap-2 rounded px-2 py-1.5 border border-gray-200 hover:bg-gray-50 text-sm"
+          className="flex-1 flex items-center gap-2 rounded-md px-2.5 py-2 border border-border hover:bg-accent text-sm transition-colors"
         >
-          <span>📄</span>
+          <FileText className="size-4 text-muted-foreground shrink-0" />
           <span className="truncate">{block.linkedPage?.title || "Untitled"}</span>
         </Link>
         <button
           onClick={() => onDelete(block.id)}
-          className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-gray-500 text-sm shrink-0"
+          className="opacity-0 group-hover:opacity-100 flex size-6 items-center justify-center rounded text-muted-foreground hover:text-destructive hover:bg-secondary shrink-0 transition-opacity"
         >
-          ×
+          <Trash2 className="size-3.5" />
         </button>
       </div>
     );
   }
 
   const isHeading = block.type === "heading";
-  const className = isHeading ? headingClasses[block.headingLevel ?? 1] : "text-[15px] leading-6";
+  const className = isHeading
+    ? headingClasses[block.headingLevel ?? 2]
+    : "text-[15px] leading-relaxed";
 
   return (
-    <div className="group flex items-start gap-2 py-0.5">
+    <div className="group flex items-start gap-1 py-0.5">
       <AutoTextarea
         value={content}
         onChange={handleChange}
         onBlur={handleBlur}
-        className={className}
+        className={cn("py-0.5", className)}
         placeholder={isHeading ? "Heading" : "Type something…"}
       />
       <button
         onClick={() => onDelete(block.id)}
-        className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-gray-500 text-sm shrink-0 mt-1"
+        className="opacity-0 group-hover:opacity-100 flex size-6 items-center justify-center rounded text-muted-foreground hover:text-destructive hover:bg-secondary shrink-0 mt-0.5 transition-opacity"
       >
-        ×
+        <Trash2 className="size-3.5" />
       </button>
     </div>
   );
@@ -138,22 +151,34 @@ export function BlockEditor({ page, onChange }: { page: PageDetail; onChange: ()
 
   return (
     <div>
-      <div>
+      <div className="space-y-0.5">
         {page.blocks.map((block) => (
           <BlockRow key={block.id} block={block} onDelete={deleteBlock} />
         ))}
       </div>
-      <div className="flex gap-2 mt-4 text-xs text-gray-400">
-        <button onClick={() => addBlock("text")} className="hover:text-gray-600">
-          + Text
-        </button>
-        <button onClick={() => addBlock("heading")} className="hover:text-gray-600">
-          + Heading
-        </button>
-        <button onClick={addPageLink} className="hover:text-gray-600">
-          + Page link
-        </button>
-      </div>
+
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button className="mt-3 inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors">
+            <Plus className="size-4" />
+            Add block
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent>
+          <DropdownMenuItem onSelect={() => addBlock("text")}>
+            <Type />
+            Text
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => addBlock("heading")}>
+            <Heading />
+            Heading
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={addPageLink}>
+            <Link2 />
+            Page link
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }

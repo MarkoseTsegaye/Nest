@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
+import { ChevronLeft, Table2 } from "lucide-react";
 import { api } from "@/lib/api-client";
 import { usePages } from "@/lib/pages-context";
 import type { PageDetail } from "@/lib/types";
@@ -49,20 +50,23 @@ export function PageView({ pageId }: { pageId: string }) {
   }
 
   if (notFound) {
-    return <div className="p-10 text-gray-400">This page doesn&apos;t exist.</div>;
+    return (
+      <div className="p-16 text-muted-foreground">This page doesn&apos;t exist.</div>
+    );
   }
   if (!page) {
-    return <div className="p-10 text-gray-300">Loading…</div>;
+    return <div className="p-16 text-muted-foreground/60">Loading…</div>;
   }
 
   return (
-    <div className="max-w-3xl mx-auto px-16 py-12">
+    <div className="max-w-3xl mx-auto px-16 py-14">
       {page.parent && (
         <Link
           href={`/pages/${page.parent.id}`}
-          className="text-sm text-gray-400 hover:text-gray-600 mb-2 inline-block"
+          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground mb-3 transition-colors"
         >
-          ← {page.parent.title || "Untitled"}
+          <ChevronLeft className="size-4" />
+          {page.parent.title || "Untitled"}
         </Link>
       )}
 
@@ -76,7 +80,7 @@ export function PageView({ pageId }: { pageId: string }) {
           api.updatePage(pageId, { title: e.target.value || "Untitled" }).then(refreshSidebar);
         }}
         placeholder="Untitled"
-        className="w-full text-4xl font-bold outline-none placeholder:text-gray-300 mb-6"
+        className="w-full bg-transparent text-4xl font-bold tracking-tight outline-none placeholder:text-muted-foreground/40 mb-8"
       />
 
       {page.isDatabase ? (
@@ -84,11 +88,12 @@ export function PageView({ pageId }: { pageId: string }) {
       ) : (
         <>
           <BlockEditor page={page} onChange={load} />
-          <div className="mt-10 pt-4 border-t border-gray-100">
+          <div className="mt-12 pt-4 border-t border-border">
             <button
               onClick={makeDatabase}
-              className="text-xs text-gray-400 hover:text-gray-600"
+              className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
             >
+              <Table2 className="size-3.5" />
               Turn into database
             </button>
           </div>

@@ -2,9 +2,25 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { Calendar, Plus } from "lucide-react";
 import { api } from "@/lib/api-client";
 import { usePages } from "@/lib/pages-context";
 import { useDebouncedCallback } from "@/lib/use-debounced-callback";
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import type { DatabaseProperty, PageDetail, PropertyType, RowPage } from "@/lib/types";
 
 function cellValue(row: RowPage, propertyId: string) {
@@ -33,35 +49,41 @@ function Cell({
   if (property.type === "select") {
     const options: string[] = JSON.parse(property.selectOptions || "[]");
     return (
-      <select
-        value={value}
-        onChange={(e) => {
-          setValue(e.target.value);
-          saveNow(e.target.value);
+      <Select
+        value={value || undefined}
+        onValueChange={(next) => {
+          setValue(next);
+          saveNow(next);
         }}
-        className="w-full bg-transparent outline-none text-sm px-2 py-1.5 cursor-pointer"
       >
-        <option value="">—</option>
-        {options.map((opt) => (
-          <option key={opt} value={opt}>
-            {opt}
-          </option>
-        ))}
-      </select>
+        <SelectTrigger className="border-0 shadow-none h-9 rounded-none px-3">
+          <SelectValue placeholder="—" />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((opt) => (
+            <SelectItem key={opt} value={opt}>
+              {opt}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     );
   }
 
   if (property.type === "date") {
     return (
-      <input
-        type="date"
-        value={value}
-        onChange={(e) => {
-          setValue(e.target.value);
-          saveNow(e.target.value);
-        }}
-        className="w-full bg-transparent outline-none text-sm px-2 py-1.5"
-      />
+      <div className="flex items-center gap-1.5 px-3">
+        <Calendar className="size-3.5 text-muted-foreground shrink-0" />
+        <input
+          type="date"
+          value={value}
+          onChange={(e) => {
+            setValue(e.target.value);
+            saveNow(e.target.value);
+          }}
+          className="w-full bg-transparent outline-none text-sm py-2 text-foreground [color-scheme:dark]"
+        />
+      </div>
     );
   }
 
@@ -74,18 +96,13 @@ function Cell({
         debouncedSave(e.target.value);
       }}
       onBlur={(e) => saveNow(e.target.value)}
-      className="w-full bg-transparent outline-none text-sm px-2 py-1.5"
+      placeholder="Empty"
+      className="w-full bg-transparent outline-none text-sm px-3 py-2 placeholder:text-muted-foreground/40"
     />
   );
 }
 
-function AddPropertyForm({
-  pageId,
-  onDone,
-}: {
-  pageId: string;
-  onDone: () => void;
-}) {
+function AddPropertyForm({ pageId, onDone }: { pageId: string; onDone: () => void }) {
   const [name, setName] = useState("");
   const [type, setType] = useState<PropertyType>("text");
   const [options, setOptions] = useState("");
@@ -104,37 +121,36 @@ function AddPropertyForm({
   }
 
   return (
-    <div className="absolute right-0 top-full mt-1 z-10 w-64 rounded border border-gray-200 bg-white shadow-lg p-3 text-sm space-y-2">
-      <input
+    <div className="w-64 space-y-2.5 p-1">
+      <Input
         autoFocus
         value={name}
         onChange={(e) => setName(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && submit()}
         placeholder="Property name"
-        className="w-full border border-gray-200 rounded px-2 py-1 outline-none"
+        className="h-8"
       />
-      <select
-        value={type}
-        onChange={(e) => setType(e.target.value as PropertyType)}
-        className="w-full border border-gray-200 rounded px-2 py-1 outline-none"
-      >
-        <option value="text">Text</option>
-        <option value="select">Select</option>
-        <option value="date">Date</option>
-      </select>
+      <Select value={type} onValueChange={(v) => setType(v as PropertyType)}>
+        <SelectTrigger className="h-8 border border-input px-3">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="text">Text</SelectItem>
+          <SelectItem value="select">Select</SelectItem>
+          <SelectItem value="date">Date</SelectItem>
+        </SelectContent>
+      </Select>
       {type === "select" && (
-        <input
+        <Input
           value={options}
           onChange={(e) => setOptions(e.target.value)}
           placeholder="Options, comma-separated"
-          className="w-full border border-gray-200 rounded px-2 py-1 outline-none"
+          className="h-8"
         />
       )}
-      <button
-        onClick={submit}
-        className="w-full rounded bg-gray-800 text-white py-1 hover:bg-gray-700"
-      >
+      <Button onClick={submit} size="sm" className="w-full">
         Add property
-      </button>
+      </Button>
     </div>
   );
 }
@@ -155,57 +171,90 @@ export function DatabaseView({ page, onChange }: { page: PageDetail; onChange: (
   }
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full border-collapse text-sm">
-        <thead>
-          <tr className="border-b border-gray-200">
-            <th className="text-left font-medium text-gray-500 px-2 py-1.5 w-64">Name</th>
-            {page.properties.map((property) => (
-              <th
-                key={property.id}
-                className="text-left font-medium text-gray-500 px-2 py-1.5 min-w-[140px]"
-              >
-                {property.name}
-              </th>
-            ))}
-            <th className="relative w-10 px-2 py-1.5">
-              <button
-                onClick={() => setAddingProperty((v) => !v)}
-                className="text-gray-400 hover:text-gray-600"
-                title="Add property"
-              >
-                +
-              </button>
-              {addingProperty && (
-                <AddPropertyForm pageId={page.id} onDone={finishAddProperty} />
+    <div className="overflow-x-auto -mx-2">
+      <div className="min-w-full inline-block px-2">
+        <div className="rounded-lg border border-border overflow-hidden">
+          <table className="w-full border-collapse text-sm">
+            <thead>
+              <tr className="border-b border-border bg-muted/40">
+                <th className="text-left font-medium text-muted-foreground px-3 py-2 w-64">
+                  Name
+                </th>
+                {page.properties.map((property) => (
+                  <th
+                    key={property.id}
+                    className="text-left font-medium text-muted-foreground px-3 py-2 min-w-[150px] border-l border-border"
+                  >
+                    {property.name}
+                  </th>
+                ))}
+                <th className="w-11 border-l border-border px-1">
+                  <DropdownMenu
+                    open={addingProperty}
+                    onOpenChange={setAddingProperty}
+                  >
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground mx-auto transition-colors"
+                        title="Add property"
+                      >
+                        <Plus className="size-4" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="p-2">
+                      <AddPropertyForm pageId={page.id} onDone={finishAddProperty} />
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {page.children.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={page.properties.length + 2}
+                    className="px-3 py-6 text-center text-muted-foreground text-[13px]"
+                  >
+                    No rows yet.
+                  </td>
+                </tr>
+              ) : (
+                page.children.map((row) => (
+                  <tr
+                    key={row.id}
+                    className="border-b border-border last:border-b-0 hover:bg-accent/50 transition-colors"
+                  >
+                    <td className="px-3 py-1">
+                      <Link
+                        href={`/pages/${row.id}`}
+                        className="font-medium hover:underline underline-offset-2"
+                      >
+                        {row.title || "Untitled"}
+                      </Link>
+                    </td>
+                    {page.properties.map((property) => (
+                      <td
+                        key={property.id}
+                        className={cn("border-l border-border align-middle")}
+                      >
+                        <Cell row={row} property={property} onChange={onChange} />
+                      </td>
+                    ))}
+                    <td className="border-l border-border" />
+                  </tr>
+                ))
               )}
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {page.children.map((row) => (
-            <tr key={row.id} className="border-b border-gray-100 hover:bg-gray-50">
-              <td className="px-2 py-1.5">
-                <Link href={`/pages/${row.id}`} className="hover:underline">
-                  {row.title || "Untitled"}
-                </Link>
-              </td>
-              {page.properties.map((property) => (
-                <td key={property.id} className="border-l border-gray-100">
-                  <Cell row={row} property={property} onChange={onChange} />
-                </td>
-              ))}
-              <td />
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <button
-        onClick={addRow}
-        className="mt-2 text-xs text-gray-400 hover:text-gray-600 px-2"
-      >
-        + New row
-      </button>
+            </tbody>
+          </table>
+        </div>
+        <button
+          onClick={addRow}
+          className="mt-2 inline-flex items-center gap-1.5 text-[13px] text-muted-foreground hover:text-foreground transition-colors px-1"
+        >
+          <Plus className="size-3.5" />
+          New row
+        </button>
+      </div>
     </div>
   );
 }
