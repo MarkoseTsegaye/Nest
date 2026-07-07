@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import Link from "next/link";
 import { Calendar, Plus } from "lucide-react";
 import { api } from "@/lib/api-client";
 import { usePages } from "@/lib/pages-context";
 import { newId } from "@/lib/id";
 import { useDebouncedCallback } from "@/lib/use-debounced-callback";
+import { useRecordAction } from "@/lib/use-page-history";
 import { cn } from "@/lib/utils";
 import { useViewState } from "@/lib/use-view-state";
 import { run, TITLE_KEY } from "@/lib/view-state";
@@ -35,11 +36,28 @@ function cellValue(row: RowPage, propertyId: string) {
 function Cell({
   row,
   property,
+  onCommitValue,
 }: {
   row: RowPage;
   property: DatabaseProperty;
+  onCommitValue: (rowId: string, propertyId: string, value: string | null) => void;
 }) {
   const [value, setValue] = useState(cellValue(row, property.id));
+  // Resync when the cell's stored value changes upstream (undo/redo mutating
+  // the row's propertyValues from PageView). Render-time pattern; skip when
+  // this cell is the currently focused input.
+  const incoming = cellValue(row, property.id);
+  const [syncedValue, setSyncedValue] = useState<string>(incoming);
+  const cellDomId = `cell-${row.id}-${property.id}`;
+  if (syncedValue !== incoming) {
+    setSyncedValue(incoming);
+    if (typeof document !== "undefined" && document.activeElement?.id !== cellDomId) {
+      setValue(incoming);
+    }
+  }
+  const record = useRecordAction();
+  // For text cells: value at focus time; supports "one undo per edit session".
+  const editStartValue = useRef<string>(value);
 
   const debouncedSave = useDebouncedCallback((next: string) => {
     api.setPropertyValue(row.id, property.id, next || null).catch(() => {});
@@ -49,16 +67,28 @@ function Cell({
     api.setPropertyValue(row.id, property.id, next || null).catch(() => {});
   }
 
+  /** Record + save an atomic (non-text-typing) cell change. */
+  function commitAtomic(next: string) {
+    const before = value;
+    setValue(next);
+    saveNow(next);
+    if (before !== next) {
+      // Mirror into the parent so undo has a real "after" to revert from.
+      onCommitValue(row.id, property.id, next || null);
+      record({
+        kind: "set-property-value",
+        rowId: row.id,
+        propertyId: property.id,
+        before: before || null,
+        after: next || null,
+      });
+    }
+  }
+
   if (property.type === "select") {
     const options: string[] = JSON.parse(property.selectOptions || "[]");
     return (
-      <Select
-        value={value || undefined}
-        onValueChange={(next) => {
-          setValue(next);
-          saveNow(next);
-        }}
-      >
+      <Select value={value || undefined} onValueChange={commitAtomic}>
         <SelectTrigger className="border-0 shadow-none h-9 rounded-none px-3">
           <SelectValue placeholder="—" />
         </SelectTrigger>
@@ -80,25 +110,44 @@ function Cell({
         <input
           type="date"
           value={value}
-          onChange={(e) => {
-            setValue(e.target.value);
-            saveNow(e.target.value);
-          }}
+          onChange={(e) => commitAtomic(e.target.value)}
           className="w-full bg-transparent outline-none text-sm py-2 text-foreground [color-scheme:dark]"
         />
       </div>
     );
   }
 
+  // text: record one action per edit session (focus → blur), and flush any
+  // pending debounced save before the blur write so it can't overwrite an undo.
   return (
     <input
+      id={cellDomId}
       type="text"
       value={value}
       onChange={(e) => {
         setValue(e.target.value);
         debouncedSave(e.target.value);
       }}
-      onBlur={(e) => saveNow(e.target.value)}
+      onFocus={() => {
+        editStartValue.current = value;
+      }}
+      onBlur={(e) => {
+        debouncedSave.cancel();
+        const next = e.target.value;
+        saveNow(next);
+        const before = editStartValue.current;
+        if (before !== next) {
+          onCommitValue(row.id, property.id, next || null);
+          record({
+            kind: "set-property-value",
+            rowId: row.id,
+            propertyId: property.id,
+            before: before || null,
+            after: next || null,
+          });
+        }
+        editStartValue.current = next;
+      }}
       placeholder="Empty"
       className="w-full bg-transparent outline-none text-sm px-3 py-2 placeholder:text-muted-foreground/40"
     />
@@ -176,6 +225,45 @@ export function DatabaseView({
     page.properties
   );
   const visibleRows = run(page.children, state);
+
+  // Mirror an edited cell value into the parent's page.children so undo/redo
+  // has real "before"/"after" state to swap between (same reason BlockRow's
+  // onCommitContent exists).
+  const commitValue = useCallback(
+    (rowId: string, propertyId: string, next: string | null) => {
+      mutate((p) => ({
+        ...p,
+        children: p.children.map((row) => {
+          if (row.id !== rowId) return row;
+          const existing = row.propertyValues.find((v) => v.propertyId === propertyId);
+          if (existing) {
+            return {
+              ...row,
+              propertyValues: row.propertyValues.map((v) =>
+                v.propertyId === propertyId ? { ...v, value: next } : v
+              ),
+            };
+          }
+          const property = p.properties.find((pr) => pr.id === propertyId);
+          if (!property) return row;
+          return {
+            ...row,
+            propertyValues: [
+              ...row.propertyValues,
+              {
+                id: `${rowId}:${propertyId}`,
+                pageId: rowId,
+                propertyId,
+                value: next,
+                property,
+              },
+            ],
+          };
+        }),
+      }));
+    },
+    [mutate]
+  );
 
   function addRow() {
     // A row is just a page under the database — createPage persists it and adds
@@ -293,7 +381,7 @@ export function DatabaseView({
                         key={property.id}
                         className={cn("border-l border-border align-middle")}
                       >
-                        <Cell row={row} property={property} />
+                        <Cell row={row} property={property} onCommitValue={commitValue} />
                       </td>
                     ))}
                     <td className="border-l border-border" />
