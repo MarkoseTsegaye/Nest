@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Calendar, Plus } from "lucide-react";
 import { api } from "@/lib/api-client";
 import { usePages } from "@/lib/pages-context";
+import { newId } from "@/lib/id";
 import { useDebouncedCallback } from "@/lib/use-debounced-callback";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -30,20 +31,18 @@ function cellValue(row: RowPage, propertyId: string) {
 function Cell({
   row,
   property,
-  onChange,
 }: {
   row: RowPage;
   property: DatabaseProperty;
-  onChange: () => void;
 }) {
   const [value, setValue] = useState(cellValue(row, property.id));
 
   const debouncedSave = useDebouncedCallback((next: string) => {
-    api.setPropertyValue(row.id, property.id, next || null);
+    api.setPropertyValue(row.id, property.id, next || null).catch(() => {});
   }, 600);
 
   function saveNow(next: string) {
-    api.setPropertyValue(row.id, property.id, next || null).then(onChange);
+    api.setPropertyValue(row.id, property.id, next || null).catch(() => {});
   }
 
   if (property.type === "select") {
@@ -102,22 +101,25 @@ function Cell({
   );
 }
 
-function AddPropertyForm({ pageId, onDone }: { pageId: string; onDone: () => void }) {
+function AddPropertyForm({
+  onAdd,
+}: {
+  onAdd: (input: { name: string; type: PropertyType; selectOptions: string[] }) => void;
+}) {
   const [name, setName] = useState("");
   const [type, setType] = useState<PropertyType>("text");
   const [options, setOptions] = useState("");
 
-  async function submit() {
+  function submit() {
     if (!name.trim()) return;
-    await api.createProperty(pageId, {
+    onAdd({
       name: name.trim(),
       type,
       selectOptions:
         type === "select"
           ? options.split(",").map((o) => o.trim()).filter(Boolean)
-          : undefined,
+          : [],
     });
-    onDone();
   }
 
   return (
@@ -155,19 +157,52 @@ function AddPropertyForm({ pageId, onDone }: { pageId: string; onDone: () => voi
   );
 }
 
-export function DatabaseView({ page, onChange }: { page: PageDetail; onChange: () => void }) {
-  const { refresh: refreshSidebar } = usePages();
+export function DatabaseView({
+  page,
+  mutate,
+  resync,
+}: {
+  page: PageDetail;
+  mutate: (fn: (p: PageDetail) => PageDetail) => void;
+  resync: () => void;
+}) {
+  const { createPage } = usePages();
   const [addingProperty, setAddingProperty] = useState(false);
 
-  async function addRow() {
-    await api.createPage({ parentId: page.id, title: "Untitled" });
-    onChange();
-    await refreshSidebar();
+  function addRow() {
+    // A row is just a page under the database — createPage persists it and adds
+    // it to the sidebar tree; we mirror it into the table immediately here.
+    const row = createPage({ parentId: page.id, title: "Untitled" });
+    const rowPage: RowPage = {
+      id: row.id,
+      title: row.title,
+      parentId: page.id,
+      isDatabase: false,
+      propertyValues: [],
+    };
+    mutate((p) => ({ ...p, children: [...p.children, rowPage] }));
   }
 
-  async function finishAddProperty() {
+  function addProperty(input: { name: string; type: PropertyType; selectOptions: string[] }) {
     setAddingProperty(false);
-    onChange();
+    const id = newId();
+    const property: DatabaseProperty = {
+      id,
+      pageId: page.id,
+      name: input.name,
+      type: input.type,
+      order: page.properties.reduce((max, p) => Math.max(max, p.order), -1) + 1,
+      selectOptions: JSON.stringify(input.selectOptions),
+    };
+    mutate((p) => ({ ...p, properties: [...p.properties, property] }));
+    api
+      .createProperty(page.id, {
+        id,
+        name: input.name,
+        type: input.type,
+        selectOptions: input.selectOptions,
+      })
+      .catch(() => resync());
   }
 
   return (
@@ -189,10 +224,7 @@ export function DatabaseView({ page, onChange }: { page: PageDetail; onChange: (
                   </th>
                 ))}
                 <th className="w-11 border-l border-border px-1">
-                  <DropdownMenu
-                    open={addingProperty}
-                    onOpenChange={setAddingProperty}
-                  >
+                  <DropdownMenu open={addingProperty} onOpenChange={setAddingProperty}>
                     <DropdownMenuTrigger asChild>
                       <button
                         className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground mx-auto transition-colors"
@@ -202,7 +234,7 @@ export function DatabaseView({ page, onChange }: { page: PageDetail; onChange: (
                       </button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end" className="p-2">
-                      <AddPropertyForm pageId={page.id} onDone={finishAddProperty} />
+                      <AddPropertyForm onAdd={addProperty} />
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </th>
@@ -237,7 +269,7 @@ export function DatabaseView({ page, onChange }: { page: PageDetail; onChange: (
                         key={property.id}
                         className={cn("border-l border-border align-middle")}
                       >
-                        <Cell row={row} property={property} onChange={onChange} />
+                        <Cell row={row} property={property} />
                       </td>
                     ))}
                     <td className="border-l border-border" />

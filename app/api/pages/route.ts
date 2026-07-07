@@ -19,6 +19,7 @@ export async function GET() {
 }
 
 const createPageSchema = z.object({
+  id: z.string().optional(),
   title: z.string().trim().min(1).optional(),
   parentId: z.string().optional(),
 });
@@ -28,6 +29,7 @@ export async function POST(request: NextRequest) {
     const body = createPageSchema.parse(await request.json().catch(() => ({})));
     const page = await prisma.page.create({
       data: {
+        id: body.id,
         title: body.title ?? "Untitled",
         parentId: body.parentId,
       },

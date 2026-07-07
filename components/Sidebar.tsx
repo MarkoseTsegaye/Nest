@@ -10,7 +10,6 @@ import {
   Trash2,
 } from "lucide-react";
 import { usePages } from "@/lib/pages-context";
-import { api } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import type { PageSummary } from "@/lib/types";
 
@@ -35,25 +34,23 @@ function TreeNode({
 }) {
   const router = useRouter();
   const params = useParams<{ id?: string }>();
-  const { refresh } = usePages();
+  const { createPage, deletePage } = usePages();
   const [collapsed, setCollapsed] = useState(false);
   const children = byParent.get(page.id) ?? [];
   const isActive = params?.id === page.id;
   const hasChildren = children.length > 0;
 
-  async function addChild(e: React.MouseEvent) {
+  function addChild(e: React.MouseEvent) {
     e.stopPropagation();
-    const child = await api.createPage({ parentId: page.id });
-    await refresh();
+    const child = createPage({ parentId: page.id });
     setCollapsed(false);
     router.push(`/pages/${child.id}`);
   }
 
-  async function remove(e: React.MouseEvent) {
+  function remove(e: React.MouseEvent) {
     e.stopPropagation();
     if (!confirm(`Delete "${page.title || "Untitled"}" and everything inside it?`)) return;
-    await api.deletePage(page.id);
-    await refresh();
+    deletePage(page.id);
     if (isActive) router.push("/");
   }
 
@@ -118,14 +115,13 @@ function TreeNode({
 }
 
 export function Sidebar() {
-  const { pages, refresh } = usePages();
+  const { pages, createPage } = usePages();
   const router = useRouter();
   const byParent = useMemo(() => buildTree(pages), [pages]);
   const roots = byParent.get(null) ?? [];
 
-  async function createRootPage() {
-    const page = await api.createPage({});
-    await refresh();
+  function createRootPage() {
+    const page = createPage({});
     router.push(`/pages/${page.id}`);
   }
 

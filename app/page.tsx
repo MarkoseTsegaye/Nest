@@ -3,16 +3,14 @@
 import { useRouter } from "next/navigation";
 import { Plus } from "lucide-react";
 import { usePages } from "@/lib/pages-context";
-import { api } from "@/lib/api-client";
 import { Button } from "@/components/ui/button";
 
 export default function Home() {
   const router = useRouter();
-  const { pages, refresh } = usePages();
+  const { pages, createPage } = usePages();
 
-  async function createPage() {
-    const page = await api.createPage({});
-    await refresh();
+  function handleCreate() {
+    const page = createPage({});
     router.push(`/pages/${page.id}`);
   }
 
@@ -25,7 +23,7 @@ export default function Home() {
             ? "A calm space for pages, blocks, and databases. Start with your first page."
             : "Pick a page from the sidebar, or start a new one."}
         </p>
-        <Button onClick={createPage}>
+        <Button onClick={handleCreate}>
           <Plus />
           New page
         </Button>

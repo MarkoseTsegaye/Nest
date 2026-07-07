@@ -5,6 +5,7 @@ import Link from "next/link";
 import { FileText, Heading, Link2, Plus, Trash2, Type } from "lucide-react";
 import { api } from "@/lib/api-client";
 import { usePages } from "@/lib/pages-context";
+import { newId } from "@/lib/id";
 import { useDebouncedCallback } from "@/lib/use-debounced-callback";
 import { cn } from "@/lib/utils";
 import {
@@ -21,13 +22,19 @@ const headingClasses: Record<number, string> = {
   3: "font-display text-lg font-semibold tracking-tight",
 };
 
+// A stable DOM id for a block's textarea, so focus can be handed to a freshly
+// added block from the dropdown's onCloseAutoFocus (after Radix settles focus).
+const blockFieldId = (id: string) => `block-field-${id}`;
+
 function AutoTextarea({
+  domId,
   value,
   onChange,
   onBlur,
   className,
   placeholder,
 }: {
+  domId: string;
   value: string;
   onChange: (value: string) => void;
   onBlur: () => void;
@@ -45,6 +52,7 @@ function AutoTextarea({
 
   return (
     <textarea
+      id={domId}
       ref={ref}
       rows={1}
       value={value}
@@ -69,7 +77,7 @@ function BlockRow({
   const [content, setContent] = useState(block.content ?? "");
 
   const debouncedSave = useDebouncedCallback((value: string) => {
-    api.updateBlock(block.id, { content: value });
+    api.updateBlock(block.id, { content: value }).catch(() => {});
   }, 800);
 
   function handleChange(value: string) {
@@ -78,7 +86,7 @@ function BlockRow({
   }
 
   function handleBlur() {
-    api.updateBlock(block.id, { content });
+    api.updateBlock(block.id, { content }).catch(() => {});
   }
 
   if (block.type === "page_link") {
@@ -109,6 +117,7 @@ function BlockRow({
   return (
     <div className="group flex items-start gap-1 py-0.5">
       <AutoTextarea
+        domId={blockFieldId(block.id)}
         value={content}
         onChange={handleChange}
         onBlur={handleBlur}
@@ -125,28 +134,71 @@ function BlockRow({
   );
 }
 
-export function BlockEditor({ page, onChange }: { page: PageDetail; onChange: () => void }) {
-  const { refresh: refreshSidebar } = usePages();
+export function BlockEditor({
+  page,
+  mutate,
+  resync,
+}: {
+  page: PageDetail;
+  mutate: (fn: (p: PageDetail) => PageDetail) => void;
+  resync: () => void;
+}) {
+  const { createPage } = usePages();
+  // The block to hand focus to once the "add block" menu finishes closing.
+  const pendingFocus = useRef<string | null>(null);
 
-  async function addBlock(type: "text" | "heading") {
-    await api.createBlock(page.id, {
+  function nextOrder() {
+    return page.blocks.reduce((max, b) => Math.max(max, b.order), -1) + 1;
+  }
+
+  function addBlock(type: "text" | "heading") {
+    const id = newId();
+    const block: Block = {
+      id,
+      pageId: page.id,
       type,
+      order: nextOrder(),
       content: "",
-      headingLevel: type === "heading" ? 2 : undefined,
-    });
-    onChange();
+      headingLevel: type === "heading" ? 2 : null,
+      linkedPageId: null,
+      linkedPage: null,
+    };
+    pendingFocus.current = id;
+    mutate((p) => ({ ...p, blocks: [...p.blocks, block] }));
+    api
+      .createBlock(page.id, {
+        id,
+        type,
+        content: "",
+        headingLevel: type === "heading" ? 2 : undefined,
+      })
+      .catch(() => resync());
   }
 
-  async function addPageLink() {
-    await api.createBlock(page.id, { type: "page_link" });
-    onChange();
-    await refreshSidebar();
+  function addPageLink() {
+    const blockId = newId();
+    // Mint the linked page up front so it shows in the sidebar immediately; the
+    // block create below persists that page too (persist: false here).
+    const child = createPage({ parentId: page.id, title: "Untitled", persist: false });
+    const block: Block = {
+      id: blockId,
+      pageId: page.id,
+      type: "page_link",
+      order: nextOrder(),
+      content: null,
+      headingLevel: null,
+      linkedPageId: child.id,
+      linkedPage: { id: child.id, title: child.title },
+    };
+    mutate((p) => ({ ...p, blocks: [...p.blocks, block] }));
+    api
+      .createBlock(page.id, { id: blockId, type: "page_link", linkedPageId: child.id })
+      .catch(() => resync());
   }
 
-  async function deleteBlock(id: string) {
-    await api.deleteBlock(id);
-    onChange();
-    await refreshSidebar();
+  function deleteBlock(id: string) {
+    mutate((p) => ({ ...p, blocks: p.blocks.filter((b) => b.id !== id) }));
+    api.deleteBlock(id).catch(() => resync());
   }
 
   return (
@@ -164,7 +216,20 @@ export function BlockEditor({ page, onChange }: { page: PageDetail; onChange: ()
             Add block
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent>
+        <DropdownMenuContent
+          onCloseAutoFocus={(e) => {
+            // Radix would restore focus to the trigger here; instead hand focus
+            // to the just-added block so the user can type into it right away.
+            const id = pendingFocus.current;
+            pendingFocus.current = null;
+            if (id) {
+              e.preventDefault();
+              requestAnimationFrame(() =>
+                document.getElementById(blockFieldId(id))?.focus()
+              );
+            }
+          }}
+        >
           <DropdownMenuItem onSelect={() => addBlock("text")}>
             <Type />
             Text

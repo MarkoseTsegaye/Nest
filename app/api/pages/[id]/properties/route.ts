@@ -6,6 +6,7 @@ import { errorResponse } from "@/lib/api-error";
 type Params = { params: Promise<{ id: string }> };
 
 const createPropertySchema = z.object({
+  id: z.string().optional(),
   name: z.string().trim().min(1),
   type: z.enum(["text", "select", "date"]),
   selectOptions: z.array(z.string()).optional(),
@@ -24,6 +25,7 @@ export async function POST(request: NextRequest, { params }: Params) {
 
     const property = await prisma.databaseProperty.create({
       data: {
+        id: body.id,
         pageId: id,
         name: body.name,
         type: body.type,

@@ -6,6 +6,7 @@ import { errorResponse } from "@/lib/api-error";
 type Params = { params: Promise<{ id: string }> };
 
 const createBlockSchema = z.object({
+  id: z.string().optional(),
   type: z.enum(["text", "heading", "page_link"]),
   content: z.string().optional(),
   headingLevel: z.number().int().min(1).max(3).optional(),
@@ -24,15 +25,30 @@ export async function POST(request: NextRequest, { params }: Params) {
     });
 
     let linkedPageId = body.linkedPageId;
-    if (body.type === "page_link" && !linkedPageId) {
-      const child = await prisma.page.create({
-        data: { title: "Untitled", parentId: id },
-      });
-      linkedPageId = child.id;
+    if (body.type === "page_link") {
+      if (linkedPageId) {
+        // The client mints the linked page's id so it can render the block and
+        // the sidebar entry immediately; create that page here if it's new.
+        const existing = await prisma.page.findUnique({
+          where: { id: linkedPageId },
+          select: { id: true },
+        });
+        if (!existing) {
+          await prisma.page.create({
+            data: { id: linkedPageId, title: "Untitled", parentId: id },
+          });
+        }
+      } else {
+        const child = await prisma.page.create({
+          data: { title: "Untitled", parentId: id },
+        });
+        linkedPageId = child.id;
+      }
     }
 
     const block = await prisma.block.create({
       data: {
+        id: body.id,
         pageId: id,
         type: body.type,
         content: body.content,
