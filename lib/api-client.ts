@@ -7,6 +7,7 @@ import type {
   PropertyType,
   PropertyValue,
 } from "./types";
+import type { SearchHit } from "./search";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
@@ -120,5 +121,10 @@ export const api = {
         method: "PUT",
         body: JSON.stringify({ propertyId, value }),
       })
+    ),
+
+  search: (q: string, limit = 20) =>
+    request<SearchHit[]>(
+      `/api/search?q=${encodeURIComponent(q)}&limit=${limit}`
     ),
 };

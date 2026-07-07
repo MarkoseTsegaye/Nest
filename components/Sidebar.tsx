@@ -1,17 +1,19 @@
 "use client";
 
 import { useRouter, useParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ChevronRight,
   FileText,
   Plus,
+  Search,
   Table2,
   Trash2,
 } from "lucide-react";
 import { usePages } from "@/lib/pages-context";
 import { cn } from "@/lib/utils";
 import type { PageSummary } from "@/lib/types";
+import { SearchDialog } from "./SearchDialog";
 
 function buildTree(pages: PageSummary[]) {
   const byParent = new Map<string | null, PageSummary[]>();
@@ -119,6 +121,20 @@ export function Sidebar() {
   const router = useRouter();
   const byParent = useMemo(() => buildTree(pages), [pages]);
   const roots = byParent.get(null) ?? [];
+  const [searchOpen, setSearchOpen] = useState(false);
+
+  // Global ⌘K / Ctrl-K toggles the search palette; ignore repeats and skip when
+  // the user is holding it down inside an input that has its own handling.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "k" && (e.metaKey || e.ctrlKey) && !e.repeat) {
+        e.preventDefault();
+        setSearchOpen((o) => !o);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   function createRootPage() {
     const page = createPage({});
@@ -133,6 +149,18 @@ export function Sidebar() {
           className="font-display text-base font-extrabold tracking-tight text-foreground"
         >
           Nest
+        </button>
+      </div>
+      <div className="px-2 pt-1 pb-2">
+        <button
+          onClick={() => setSearchOpen(true)}
+          className="w-full flex items-center gap-2 text-sm text-muted-foreground hover:bg-accent hover:text-foreground rounded-md px-2 h-8 transition-colors"
+        >
+          <Search className="size-4" />
+          <span className="flex-1 text-left">Search</span>
+          <kbd className="text-[10px] tracking-wider font-mono text-muted-foreground/70 bg-secondary px-1.5 py-0.5 rounded">
+            ⌘K
+          </kbd>
         </button>
       </div>
       <div className="flex-1 px-2 pb-2 overflow-y-auto">
@@ -153,6 +181,7 @@ export function Sidebar() {
           New page
         </button>
       </div>
+      <SearchDialog open={searchOpen} onOpenChange={setSearchOpen} />
     </aside>
   );
 }
