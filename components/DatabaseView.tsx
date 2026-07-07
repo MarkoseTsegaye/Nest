@@ -8,6 +8,8 @@ import { usePages } from "@/lib/pages-context";
 import { newId } from "@/lib/id";
 import { useDebouncedCallback } from "@/lib/use-debounced-callback";
 import { cn } from "@/lib/utils";
+import { useViewState } from "@/lib/use-view-state";
+import { run, TITLE_KEY } from "@/lib/view-state";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -23,6 +25,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { DatabaseProperty, PageDetail, PropertyType, RowPage } from "@/lib/types";
+import { SortableHeader } from "./SortableHeader";
+import { ViewControls } from "./ViewControls";
 
 function cellValue(row: RowPage, propertyId: string) {
   return row.propertyValues.find((v) => v.propertyId === propertyId)?.value ?? "";
@@ -168,6 +172,10 @@ export function DatabaseView({
 }) {
   const { createPage } = usePages();
   const [addingProperty, setAddingProperty] = useState(false);
+  const { state, setSort, addFilter, updateFilter, removeFilter } = useViewState(
+    page.properties
+  );
+  const visibleRows = run(page.children, state);
 
   function addRow() {
     // A row is just a page under the database — createPage persists it and adds
@@ -206,22 +214,36 @@ export function DatabaseView({
   }
 
   return (
-    <div className="overflow-x-auto -mx-2">
+    <div>
+      <ViewControls
+        filters={state.filters}
+        properties={page.properties}
+        onAdd={addFilter}
+        onUpdate={updateFilter}
+        onRemove={removeFilter}
+      />
+      <div className="overflow-x-auto -mx-2">
       <div className="min-w-full inline-block px-2">
         <div className="rounded-lg border border-border overflow-hidden">
           <table className="w-full border-collapse text-sm">
             <thead>
               <tr className="border-b border-border bg-muted/40">
-                <th className="text-left font-medium text-muted-foreground px-3 py-2 w-64">
-                  Name
-                </th>
+                <SortableHeader
+                  by={TITLE_KEY}
+                  label="Name"
+                  sort={state.sort}
+                  onSort={setSort}
+                  className="w-64"
+                />
                 {page.properties.map((property) => (
-                  <th
+                  <SortableHeader
                     key={property.id}
-                    className="text-left font-medium text-muted-foreground px-3 py-2 min-w-[150px] border-l border-border"
-                  >
-                    {property.name}
-                  </th>
+                    by={property.id}
+                    label={property.name}
+                    sort={state.sort}
+                    onSort={setSort}
+                    className="min-w-[150px] border-l border-border"
+                  />
                 ))}
                 <th className="w-11 border-l border-border px-1">
                   <DropdownMenu open={addingProperty} onOpenChange={setAddingProperty}>
@@ -241,17 +263,19 @@ export function DatabaseView({
               </tr>
             </thead>
             <tbody>
-              {page.children.length === 0 ? (
+              {visibleRows.length === 0 ? (
                 <tr>
                   <td
                     colSpan={page.properties.length + 2}
                     className="px-3 py-6 text-center text-muted-foreground text-[13px]"
                   >
-                    No rows yet.
+                    {page.children.length === 0
+                      ? "No rows yet."
+                      : "No rows match the current filter."}
                   </td>
                 </tr>
               ) : (
-                page.children.map((row) => (
+                visibleRows.map((row) => (
                   <tr
                     key={row.id}
                     className="border-b border-border last:border-b-0 hover:bg-accent/50 transition-colors"
@@ -286,6 +310,7 @@ export function DatabaseView({
           <Plus className="size-3.5" />
           New row
         </button>
+      </div>
       </div>
     </div>
   );
