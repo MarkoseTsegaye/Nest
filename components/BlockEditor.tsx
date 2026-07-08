@@ -205,7 +205,11 @@ export function BlockEditor({
       linkedPage: null,
     };
     pendingFocus.current = id;
+    // Record the position at which the block is being appended so undo can
+    // remove it and redo can splice it back to the same slot.
+    const index = page.blocks.length;
     mutate((p) => ({ ...p, blocks: [...p.blocks, block] }));
+    record({ kind: "create-block", block, index });
     api
       .createBlock(page.id, {
         id,

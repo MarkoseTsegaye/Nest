@@ -4,17 +4,18 @@ import type { Block } from "./types";
  * Undo/redo — the "action" representation and the tiny pure reducer helpers
  * around a per-page history stack.
  *
- * Scope (deliberately narrow — matches the feature spec):
- *   • block content edits — reverting the text in a text/heading block
- *   • block deletes       — restoring a deleted block (content, order, kind)
- *   • cell edits          — reverting a database-row property value
+ * Scope:
+ *   • block content edits    — revert the text in a text/heading block
+ *   • block creates          — remove a just-added text/heading block
+ *   • block deletes          — restore a deleted block (content, order, kind)
+ *   • database row creates   — remove a just-added row (page under a database)
+ *   • cell edits             — revert a database-row property value
  *
- * Deliberately NOT covered: page create/delete, page rename, adding blocks,
- * schema changes (add property, turn-into-database). Those need different
- * invariants — mixing them into the same stack invites subtle bugs.
- *
- * Not covered because Notion doesn't do them either at the block/undo layer:
- * block reorders (drag-drop isn't in Nest yet), style flips.
+ * NOT covered: page rename, top-level page create/delete, add-property,
+ * turn-into-database, page_link blocks (which also create a linked child
+ * page — undo semantics for both together are a design call worth revisiting
+ * separately). Structural changes outside this list are excluded so the
+ * inverse pair stays deterministic.
  *
  * Every Action carries BOTH sides of the change — its `before` and `after`
  * state — so undo and redo each have everything they need without consulting
@@ -30,12 +31,38 @@ export interface EditBlockContentAction {
   after: string;
 }
 
+/**
+ * A block was created. Snapshot is the block as it was inserted; undo removes
+ * it (and redo splices it back exactly the same way).
+ */
+export interface CreateBlockAction {
+  kind: "create-block";
+  block: Block;
+  /** Position within its page's block list at create time (0-indexed). */
+  index: number;
+}
+
 /** A block was deleted; snapshot lets us reinstate it verbatim at its old slot. */
 export interface DeleteBlockAction {
   kind: "delete-block";
   block: Block;
   /** Position within its page's block list at delete time (0-indexed). */
   index: number;
+}
+
+/**
+ * A database row was added. A row is just a Page parented under a database
+ * page, so the inverse touches both the sidebar tree (via PagesContext) and
+ * the database's `children` list.
+ */
+export interface CreateRowAction {
+  kind: "create-row";
+  rowId: string;
+  databasePageId: string;
+  /** Position within the database's `children` at create time. */
+  index: number;
+  /** Title used at creation; carried so redo restores identical state. */
+  title: string;
 }
 
 /** A database row's cell (property value) was set from `before` to `after`. */
@@ -49,7 +76,9 @@ export interface SetPropertyValueAction {
 
 export type Action =
   | EditBlockContentAction
+  | CreateBlockAction
   | DeleteBlockAction
+  | CreateRowAction
   | SetPropertyValueAction;
 
 /**

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { ChevronLeft, Redo2, Table2, Undo2 } from "lucide-react";
 import { api } from "@/lib/api-client";
 import { usePages } from "@/lib/pages-context";
-import type { PageDetail, PropertyValue } from "@/lib/types";
+import type { PageDetail, PropertyValue, RowPage } from "@/lib/types";
 import { BlockEditor } from "./BlockEditor";
 import { DatabaseView } from "./DatabaseView";
 import { useDebouncedCallback } from "@/lib/use-debounced-callback";
@@ -14,7 +14,7 @@ import type { Action } from "@/lib/undo-redo";
 import { cn } from "@/lib/utils";
 
 export function PageView({ pageId }: { pageId: string }) {
-  const { pages, peekSeed, takeSeed, patchPageLocal } = usePages();
+  const { pages, peekSeed, takeSeed, patchPageLocal, createPage, deletePage } = usePages();
   const [page, setPage] = useState<PageDetail | null>(null);
   const [title, setTitle] = useState("");
   const [notFound, setNotFound] = useState(false);
@@ -128,6 +128,35 @@ export function PageView({ pageId }: { pageId: string }) {
           api.updateBlock(action.blockId, { content: target }).catch(() => resync());
           return;
         }
+        case "create-block": {
+          if (direction === "undo") {
+            // Take back the block: remove locally, delete on the server. The
+            // api-client's afterCreate() serializer ensures the DELETE waits
+            // for any in-flight CREATE with the same id.
+            mutate((p) => ({
+              ...p,
+              blocks: p.blocks.filter((b) => b.id !== action.block.id),
+            }));
+            api.deleteBlock(action.block.id).catch(() => resync());
+          } else {
+            // Redo: put it back at its original slot and re-create on the server.
+            mutate((p) => {
+              const blocks = p.blocks.slice();
+              const at = Math.min(action.index, blocks.length);
+              blocks.splice(at, 0, action.block);
+              return { ...p, blocks };
+            });
+            api
+              .createBlock(action.block.pageId, {
+                id: action.block.id,
+                type: action.block.type,
+                content: action.block.content ?? undefined,
+                headingLevel: action.block.headingLevel ?? undefined,
+              })
+              .catch(() => resync());
+          }
+          return;
+        }
         case "delete-block": {
           if (direction === "undo") {
             // Splice the block back into the visible list at its old slot
@@ -153,6 +182,40 @@ export function PageView({ pageId }: { pageId: string }) {
               blocks: p.blocks.filter((b) => b.id !== action.block.id),
             }));
             api.deleteBlock(action.block.id).catch(() => resync());
+          }
+          return;
+        }
+        case "create-row": {
+          if (direction === "undo") {
+            // Remove the row from the database's visible list AND drop the page
+            // from the sidebar tree. deletePage handles the server DELETE and
+            // ripples via the api-client's ordering serializer.
+            mutate((p) => ({
+              ...p,
+              children: p.children.filter((r) => r.id !== action.rowId),
+            }));
+            deletePage(action.rowId);
+          } else {
+            // Redo: recreate the row page under the database and splice it back
+            // into the database's children at its original slot.
+            createPage({
+              id: action.rowId,
+              parentId: action.databasePageId,
+              title: action.title,
+            });
+            mutate((p) => {
+              const restored: RowPage = {
+                id: action.rowId,
+                title: action.title,
+                parentId: action.databasePageId,
+                isDatabase: false,
+                propertyValues: [],
+              };
+              const children = p.children.slice();
+              const at = Math.min(action.index, children.length);
+              children.splice(at, 0, restored);
+              return { ...p, children };
+            });
           }
           return;
         }
@@ -196,7 +259,7 @@ export function PageView({ pageId }: { pageId: string }) {
         }
       }
     },
-    [mutate, resync]
+    [mutate, resync, createPage, deletePage]
   );
 
   const history = usePageHistory(pageId, applyAction);

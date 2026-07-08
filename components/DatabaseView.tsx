@@ -220,6 +220,7 @@ export function DatabaseView({
   resync: () => void;
 }) {
   const { createPage } = usePages();
+  const record = useRecordAction();
   const [addingProperty, setAddingProperty] = useState(false);
   const { state, setSort, addFilter, updateFilter, removeFilter } = useViewState(
     page.properties
@@ -276,7 +277,15 @@ export function DatabaseView({
       isDatabase: false,
       propertyValues: [],
     };
+    const index = page.children.length;
     mutate((p) => ({ ...p, children: [...p.children, rowPage] }));
+    record({
+      kind: "create-row",
+      rowId: row.id,
+      databasePageId: page.id,
+      index,
+      title: row.title,
+    });
   }
 
   function addProperty(input: { name: string; type: PropertyType; selectOptions: string[] }) {
