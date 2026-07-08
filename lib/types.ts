@@ -1,4 +1,11 @@
-export type BlockType = "text" | "heading" | "page_link";
+import type { BlockContent } from "./block-content";
+
+export type BlockType =
+  | "text"
+  | "heading"
+  | "bulleted_list_item"
+  | "numbered_list_item"
+  | "page_link";
 export type PropertyType = "text" | "select" | "date";
 
 export interface PageSummary {
@@ -14,7 +21,13 @@ export interface Block {
   pageId: string;
   type: BlockType;
   order: number;
-  content: string | null;
+  /**
+   * Inline-formatted content for text / heading / bulleted-list-item /
+   * numbered-list-item blocks. `null` for page_link blocks (which use
+   * `linkedPageId` instead). Stored server-side as a JSON string; the API
+   * boundary parses/serializes so callers always work with Span[].
+   */
+  content: BlockContent | null;
   headingLevel: number | null;
   linkedPageId: string | null;
   linkedPage: { id: string; title: string } | null;
