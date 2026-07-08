@@ -154,4 +154,37 @@
     background: var(--border);
     border-radius: 9999px;
   }
+
+  /* --- Inline formatting marks. Data attributes on the <span> children of an
+     InlineEditor drive these; keeping them here (rather than as Tailwind
+     utilities) means the DOM shape the editor produces on write is exactly
+     what it reads back on the next input event.
+     Colors are muted deliberately — this is a note-taking app, not a
+     highlighter demo. --- */
+  [data-bold="1"] { font-weight: 700; }
+  [data-italic="1"] { font-style: italic; }
+  [data-underline="1"] { text-decoration: underline; }
+  [data-strike="1"] { text-decoration: line-through; }
+  [data-underline="1"][data-strike="1"] {
+    text-decoration: underline line-through;
+  }
+  [data-code="1"] {
+    font-family: var(--font-mono), ui-monospace, monospace;
+    font-size: 0.9em;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--secondary);
+    border: 1px solid var(--border);
+  }
+
+  [data-color="gray"]   { color: #9ca3af; }
+  [data-color="red"]    { color: #f87171; }
+  [data-color="orange"] { color: #fb923c; }
+  [data-color="yellow"] { color: #fbbf24; }
+  [data-color="green"]  { color: #34d399; }
+  [data-color="blue"]   { color: #60a5fa; }
+  [data-color="purple"] { color: #c084fc; }
+
+  [data-size="small"] { font-size: 0.85em; }
+  [data-size="large"] { font-size: 1.25em; }
 }

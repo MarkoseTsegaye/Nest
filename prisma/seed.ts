@@ -6,6 +6,14 @@ const adapter = new PrismaBetterSqlite3({
 });
 const prisma = new PrismaClient({ adapter });
 
+/**
+ * Serialize a plain string as a single-Span BlockContent (the new inline
+ * formatting shape — see lib/block-content.ts). Empty string persists as [].
+ */
+function plain(text: string): string {
+  return text === "" ? "[]" : JSON.stringify([{ text }]);
+}
+
 async function main() {
   const existing = await prisma.page.count();
   if (existing > 0) {
@@ -18,10 +26,17 @@ async function main() {
       title: "Welcome",
       blocks: {
         create: [
-          { type: "heading", headingLevel: 1, content: "Welcome to Nest", order: 0 },
+          {
+            type: "heading",
+            headingLevel: 1,
+            content: plain("Welcome to Nest"),
+            order: 0,
+          },
           {
             type: "text",
-            content: "This is a scoped-down Notion clone. Use the sidebar to create pages, and turn any page into a database.",
+            content: plain(
+              "This is a scoped-down Notion clone. Use the sidebar to create pages, and turn any page into a database."
+            ),
             order: 1,
           },
         ],
@@ -36,7 +51,12 @@ async function main() {
       isDatabase: true,
       properties: {
         create: [
-          { name: "Status", type: "select", order: 0, selectOptions: JSON.stringify(["Todo", "In Progress", "Done"]) },
+          {
+            name: "Status",
+            type: "select",
+            order: 0,
+            selectOptions: JSON.stringify(["Todo", "In Progress", "Done"]),
+          },
           { name: "Due", type: "date", order: 1 },
         ],
       },
@@ -50,6 +70,11 @@ async function main() {
     data: {
       title: "First task",
       parentId: tasksDb.id,
+      // A database row is also a Page — give it its default empty text block
+      // so opening it into a full-page view shows something to type into.
+      blocks: {
+        create: [{ type: "text", content: plain(""), order: 0 }],
+      },
       propertyValues: {
         create: [{ propertyId: status.id, value: "Todo" }],
       },

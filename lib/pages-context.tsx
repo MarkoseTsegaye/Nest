@@ -68,6 +68,10 @@ export function PagesProvider({ children }: { children: React.ReactNode }) {
     const id = input.id ?? newId();
     const parentId = input.parentId ?? null;
     const title = input.title ?? "Untitled";
+    // Every fresh page ships with one empty text block ready to type in
+    // (server creates it in the same transaction; we seed it here too so the
+    // block appears instantly). Client-minted id keeps identity stable.
+    const defaultBlockId = newId();
     const summary: PageSummary = {
       id,
       title,
@@ -87,7 +91,18 @@ export function PagesProvider({ children }: { children: React.ReactNode }) {
       parentId,
       isDatabase: false,
       parent: parent ? { id: parent.id, title: parent.title } : null,
-      blocks: [],
+      blocks: [
+        {
+          id: defaultBlockId,
+          pageId: id,
+          type: "text",
+          order: 0,
+          content: [],
+          headingLevel: null,
+          linkedPageId: null,
+          linkedPage: null,
+        },
+      ],
       properties: [],
       propertyValues: [],
       children: [],
@@ -95,7 +110,7 @@ export function PagesProvider({ children }: { children: React.ReactNode }) {
 
     if (input.persist !== false) {
       api
-        .createPage({ id, title, parentId: parentId ?? undefined })
+        .createPage({ id, title, parentId: parentId ?? undefined, defaultBlockId })
         .catch(() => refresh());
     }
 
