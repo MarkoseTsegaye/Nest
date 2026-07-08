@@ -6,8 +6,6 @@ import {
   FileText,
   Heading,
   Link2,
-  List,
-  ListOrdered,
   Plus,
   Trash2,
   Type,
@@ -17,7 +15,6 @@ import { usePages } from "@/lib/pages-context";
 import { newId } from "@/lib/id";
 import {
   contentToPlainText,
-  isEmptyContent,
   serializeContent,
   type BlockContent,
 } from "@/lib/block-content";
@@ -33,7 +30,7 @@ import {
 import type { Block, BlockType, PageDetail } from "@/lib/types";
 import { InlineEditor, type InlineEditorHandle } from "./InlineEditor";
 import { FormattingToolbar } from "./FormattingToolbar";
-import { runSlashCommand, SLASH_COMMANDS } from "@/lib/slash-commands";
+import { runSlashCommand, type SlashCommand } from "@/lib/slash-commands";
 
 const headingClasses: Record<number, string> = {
   1: "font-display text-2xl font-bold tracking-tight",
@@ -41,8 +38,8 @@ const headingClasses: Record<number, string> = {
   3: "font-display text-lg font-semibold tracking-tight",
 };
 
-// A stable DOM id for a block's editor root, used for focus hand-off from
-// the "Add block" dropdown and for the render-time sync's focus check.
+// Stable DOM id for a block's editor root — used for focus handoff after
+// creating a block via the gutter menu or an Enter key.
 const blockFieldId = (id: string) => `block-field-${id}`;
 
 interface ConvertHint {
@@ -81,12 +78,16 @@ function BlockRow({
   onDelete,
   onCommitContent,
   onConvert,
+  onInsertAfter,
+  onAddOfType,
 }: {
   block: Block;
   indexInList: number;
   onDelete: (block: Block) => void;
   onCommitContent: (id: string, content: BlockContent) => void;
   onConvert: (block: Block, next: ConvertHint) => void;
+  onInsertAfter: (afterBlock: Block) => void;
+  onAddOfType: (afterBlock: Block, type: "text" | "heading" | "page_link") => void;
 }) {
   const [content, setContent] = useState<BlockContent>(block.content ?? []);
   // Track the value at focus time so we record a single undo entry per edit
@@ -98,8 +99,7 @@ function BlockRow({
   const [slashQuery, setSlashQuery] = useState("");
 
   // Sync local content when the parent mutates block.content from outside
-  // (undo, redo, mark toggle) unless the user is currently typing in this
-  // block's editor. Render-time reset pattern, same as other components.
+  // (undo, redo, mark toggle) unless the user is currently typing here.
   const [syncedSerialized, setSyncedSerialized] = useState<string>(
     serializeContent(block.content ?? [])
   );
@@ -121,9 +121,8 @@ function BlockRow({
   function handleChange(next: BlockContent) {
     setContent(next);
     debouncedSave(next);
-    // Slash command detection — trigger only when the entire block is a
-    // single "/word" pattern, so we don't spring a menu on someone typing
-    // "and/or" in a paragraph.
+    // Slash detection: open menu when the whole block reads "/word" so
+    // typing "and/or" in prose doesn't spring the menu.
     const plain = contentToPlainText(next).trim();
     if (/^\/[a-z0-9]*$/i.test(plain)) {
       setSlashOpen(true);
@@ -141,9 +140,7 @@ function BlockRow({
     debouncedSave.cancel();
     api.updateBlock(block.id, { content: final }).catch(() => {});
     const before = editStartValue.current;
-    const beforeSerialized = serializeContent(before);
-    const afterSerialized = serializeContent(final);
-    if (beforeSerialized !== afterSerialized) {
+    if (serializeContent(before) !== serializeContent(final)) {
       onCommitContent(block.id, final);
       record({
         kind: "edit-block-content",
@@ -154,23 +151,36 @@ function BlockRow({
     }
     editStartValue.current = final;
     setContent(final);
-    // Don't leave the slash menu open when focus leaves; another edit will
-    // reopen it if it's still relevant.
     setSlashOpen(false);
   }
 
-  function pickSlash(commandName: string) {
-    const cmd = SLASH_COMMANDS.find((c) => c.name === commandName);
-    if (!cmd) return;
+  function pickSlash(cmd: SlashCommand) {
     setSlashOpen(false);
-    // Blank the block and convert it. The parent handles the API type change
-    // (so undo can revert both together via a resync fallback).
+    // Reset LOCAL editor state to empty so the "/h1" text disappears — without
+    // this, the parent's mutate-to-empty is blocked by our render-time focus
+    // guard (the editor is focused when the user clicks the menu).
+    setContent([]);
+    editStartValue.current = [];
     onConvert(block, { type: cmd.type, headingLevel: cmd.headingLevel });
+    // Refocus the editor after conversion so the user can immediately type.
+    requestAnimationFrame(() => editorRef.current?.focus());
+  }
+
+  function handleEnter() {
+    if (slashOpen) {
+      const top = runSlashCommand(slashQuery, 1)[0];
+      if (top) {
+        pickSlash(top);
+        return;
+      }
+    }
+    onInsertAfter(block);
   }
 
   if (block.type === "page_link") {
     return (
-      <div className="group flex items-center gap-1 py-0.5">
+      <div className="group flex items-center gap-1 py-0.5 relative">
+        <GutterAdd onAdd={(t) => onAddOfType(block, t)} />
         <Link
           href={`/pages/${block.linkedPageId}`}
           className="flex-1 flex items-center gap-2 rounded-md px-2.5 py-2 border border-border hover:bg-accent text-sm transition-colors"
@@ -197,16 +207,18 @@ function BlockRow({
 
   return (
     <div className="group relative flex items-start gap-1 py-0.5">
+      <GutterAdd onAdd={(t) => onAddOfType(block, t)} />
       {marker(block.type, indexInList)}
       <InlineEditor
         domId={blockFieldId(block.id)}
         editorRef={editorRef}
         content={content}
         placeholder={placeholder}
-        className={cn("flex-1", classNameFor(block))}
+        className={cn("flex-1 min-w-0", classNameFor(block))}
         onChange={handleChange}
         onFocus={handleFocus}
         onBlur={handleBlur}
+        onEnter={handleEnter}
       />
       <button
         onClick={() => onDelete(block)}
@@ -226,9 +238,46 @@ function BlockRow({
         <SlashMenu
           query={slashQuery}
           onPick={pickSlash}
-          onClose={() => setSlashOpen(false)}
         />
       )}
+    </div>
+  );
+}
+
+function GutterAdd({
+  onAdd,
+}: {
+  onAdd: (type: "text" | "heading" | "page_link") => void;
+}) {
+  return (
+    <div className="absolute -left-8 top-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            title="Add block below"
+            className="flex size-6 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
+            // Don't blur the currently-focused editor when opening.
+            onMouseDown={(e) => e.preventDefault()}
+          >
+            <Plus className="size-4" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start">
+          <DropdownMenuItem onSelect={() => onAdd("text")}>
+            <Type />
+            Text
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => onAdd("heading")}>
+            <Heading />
+            Heading
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => onAdd("page_link")}>
+            <Link2 />
+            Page link
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }
@@ -236,33 +285,25 @@ function BlockRow({
 function SlashMenu({
   query,
   onPick,
-  onClose,
 }: {
   query: string;
-  onPick: (name: string) => void;
-  onClose: () => void;
+  onPick: (cmd: SlashCommand) => void;
 }) {
   const results = useMemo(() => runSlashCommand(query, 8), [query]);
-
-  // Enter is dispatched at the document level so we don't need to reach into
-  // the InlineEditor's onKeyDown; the editor eats its own Enter, but this
-  // handler fires first via capture.
-  useMemo(() => {
-    if (typeof window === "undefined") return;
-    // no-op; retained for potential future use
-  }, []);
-
   if (results.length === 0) return null;
 
   return (
     <div
+      // Keep clicks from blurring the editor — otherwise the blur handler
+      // would fire before our onClick, closing the menu.
+      onMouseDown={(e) => e.preventDefault()}
       className="absolute left-4 top-full z-40 mt-1 w-56 rounded-lg border border-border bg-popover shadow-lg p-1"
-      onMouseDown={(e) => e.preventDefault()} // don't blur the editor
     >
       {results.map((r, i) => (
         <button
           key={r.name}
-          onClick={() => onPick(r.name)}
+          type="button"
+          onClick={() => onPick(r)}
           data-first={i === 0 ? "1" : undefined}
           className={cn(
             "w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-left",
@@ -275,7 +316,6 @@ function SlashMenu({
           <span className="text-xs text-muted-foreground/60">/{r.name}</span>
         </button>
       ))}
-      <button className="hidden" onClick={onClose} />
     </div>
   );
 }
@@ -293,26 +333,60 @@ export function BlockEditor({
   const record = useRecordAction();
   const pendingFocus = useRef<string | null>(null);
 
-  function nextOrder() {
-    return page.blocks.reduce((max, b) => Math.max(max, b.order), -1) + 1;
+  function focusPending() {
+    const id = pendingFocus.current;
+    pendingFocus.current = null;
+    if (id) {
+      requestAnimationFrame(() => {
+        document.getElementById(blockFieldId(id))?.focus();
+      });
+    }
   }
 
-  function addBlock(type: "text" | "heading") {
+  function insertBlockAt(
+    afterIndex: number,
+    type: "text" | "heading" | "page_link"
+  ): Block {
     const id = newId();
+    if (type === "page_link") {
+      const child = createPage({ parentId: page.id, title: "Untitled", persist: false });
+      const block: Block = {
+        id,
+        pageId: page.id,
+        type: "page_link",
+        order: afterIndex,
+        content: null,
+        headingLevel: null,
+        linkedPageId: child.id,
+        linkedPage: { id: child.id, title: child.title },
+      };
+      mutate((p) => {
+        const blocks = p.blocks.slice();
+        blocks.splice(afterIndex, 0, block);
+        return { ...p, blocks };
+      });
+      api
+        .createBlock(page.id, { id, type: "page_link", linkedPageId: child.id })
+        .catch(() => resync());
+      return block;
+    }
     const block: Block = {
       id,
       pageId: page.id,
       type,
-      order: nextOrder(),
+      order: afterIndex,
       content: [],
       headingLevel: type === "heading" ? 2 : null,
       linkedPageId: null,
       linkedPage: null,
     };
     pendingFocus.current = id;
-    const index = page.blocks.length;
-    mutate((p) => ({ ...p, blocks: [...p.blocks, block] }));
-    record({ kind: "create-block", block, index });
+    mutate((p) => {
+      const blocks = p.blocks.slice();
+      blocks.splice(afterIndex, 0, block);
+      return { ...p, blocks };
+    });
+    record({ kind: "create-block", block, index: afterIndex });
     api
       .createBlock(page.id, {
         id,
@@ -321,25 +395,21 @@ export function BlockEditor({
         headingLevel: type === "heading" ? 2 : undefined,
       })
       .catch(() => resync());
+    focusPending();
+    return block;
   }
 
-  function addPageLink() {
-    const blockId = newId();
-    const child = createPage({ parentId: page.id, title: "Untitled", persist: false });
-    const block: Block = {
-      id: blockId,
-      pageId: page.id,
-      type: "page_link",
-      order: nextOrder(),
-      content: null,
-      headingLevel: null,
-      linkedPageId: child.id,
-      linkedPage: { id: child.id, title: child.title },
-    };
-    mutate((p) => ({ ...p, blocks: [...p.blocks, block] }));
-    api
-      .createBlock(page.id, { id: blockId, type: "page_link", linkedPageId: child.id })
-      .catch(() => resync());
+  function insertBlockAfter(afterBlock: Block) {
+    const at = page.blocks.findIndex((b) => b.id === afterBlock.id) + 1;
+    insertBlockAt(at, "text");
+  }
+
+  function addOfType(
+    afterBlock: Block,
+    type: "text" | "heading" | "page_link"
+  ) {
+    const at = page.blocks.findIndex((b) => b.id === afterBlock.id) + 1;
+    insertBlockAt(at, type);
   }
 
   function deleteBlock(block: Block) {
@@ -359,10 +429,6 @@ export function BlockEditor({
     [mutate]
   );
 
-  // Convert a block's type via slash command. Records nothing for undo yet
-  // (that would need a new action variant for kind changes); a subsequent
-  // edit gives you an undo entry that reverts the content, and refresh
-  // recovers the type.
   function convertBlock(block: Block, next: ConvertHint) {
     mutate((p) => ({
       ...p,
@@ -386,26 +452,24 @@ export function BlockEditor({
       .catch(() => resync());
   }
 
-  // Render blocks, wrapping consecutive list items in a shared UL/OL for
-  // proper list markup. Each element in `groups` is either a plain block or
-  // a run of adjacent list items.
   const groups = useMemo(() => groupBlocks(page.blocks), [page.blocks]);
 
+  const rowProps = {
+    onDelete: deleteBlock,
+    onCommitContent: commitContent,
+    onConvert: convertBlock,
+    onInsertAfter: insertBlockAfter,
+    onAddOfType: addOfType,
+  };
+
   return (
-    <div>
+    <div className="pl-8">
       <div className="space-y-0.5">
         {groups.map((group, gi) =>
           group.kind === "list" ? (
             <div key={`list-${gi}`} className="pl-1">
               {group.blocks.map((b, i) => (
-                <BlockRow
-                  key={b.id}
-                  block={b}
-                  indexInList={i}
-                  onDelete={deleteBlock}
-                  onCommitContent={commitContent}
-                  onConvert={convertBlock}
-                />
+                <BlockRow key={b.id} block={b} indexInList={i} {...rowProps} />
               ))}
             </div>
           ) : (
@@ -413,47 +477,11 @@ export function BlockEditor({
               key={group.block.id}
               block={group.block}
               indexInList={0}
-              onDelete={deleteBlock}
-              onCommitContent={commitContent}
-              onConvert={convertBlock}
+              {...rowProps}
             />
           )
         )}
       </div>
-
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button className="mt-3 inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors">
-            <Plus className="size-4" />
-            Add block
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent
-          onCloseAutoFocus={(e) => {
-            const id = pendingFocus.current;
-            pendingFocus.current = null;
-            if (id) {
-              e.preventDefault();
-              requestAnimationFrame(() =>
-                document.getElementById(blockFieldId(id))?.focus()
-              );
-            }
-          }}
-        >
-          <DropdownMenuItem onSelect={() => addBlock("text")}>
-            <Type />
-            Text
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => addBlock("heading")}>
-            <Heading />
-            Heading
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={addPageLink}>
-            <Link2 />
-            Page link
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
     </div>
   );
 }
@@ -478,8 +506,3 @@ function groupBlocks(blocks: Block[]): BlockGroup[] {
   }
   return out;
 }
-
-// Suppress unused-warning for the pull-out symbols referenced by TSX above.
-void isEmptyContent;
-void List;
-void ListOrdered;

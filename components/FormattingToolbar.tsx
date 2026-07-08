@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   Bold,
@@ -14,11 +14,11 @@ import {
 import {
   BOOLEAN_MARKS,
   COLORS,
-  SIZES,
   type BlockContent,
   type BooleanMark,
   type Color,
   type Size,
+  type Span,
 } from "@/lib/block-content";
 import {
   rangeHasMark,
@@ -29,15 +29,26 @@ import { cn } from "@/lib/utils";
 import { type InlineEditorHandle } from "./InlineEditor";
 
 /*
- * Floating selection toolbar — appears above a text range inside the block
- * this component is nested in. Rendered through a portal so it can escape
- * overflow-hidden ancestors and sit at document scope.
+ * Selection toolbar.
  *
- * State model:
- *   - "hidden" when there's no non-collapsed selection inside our editor root.
- *   - "visible" with a computed rect derived from Range.getBoundingClientRect.
+ * Visibility model (rewritten from the initial version, which was too eager):
  *
- * Positioning: centered above the selection, clamped inside the viewport.
+ *   • Only shows on **mouseup** (drag-select finished) or **keyup** (shift-arrow
+ *     selection finished). No flicker during the drag.
+ *   • Hides on **mousedown** anywhere outside the toolbar — user is about to
+ *     click somewhere else.
+ *   • Hides when the selection collapses (typing after a selection).
+ *
+ * Interaction:
+ *
+ *   • The toolbar and every button carry data-toolbar="1" so we can identify
+ *     mousedowns inside it and skip the auto-hide.
+ *   • Every button calls preventDefault on its own mousedown so focus stays
+ *     on the contentEditable — otherwise mark-apply would run against a
+ *     selection that no longer exists.
+ *   • Marks apply to the offsets frozen at the moment the toolbar became
+ *     visible. Reapplying (a second click) uses the same frozen offsets, so
+ *     even a brief DOM repaint between clicks can't misalign the range.
  */
 
 const BOOLEAN_ICON: Record<BooleanMark, React.ComponentType<{ className?: string }>> = {
@@ -59,7 +70,7 @@ const COLOR_SWATCH: Record<Color, string> = {
 };
 
 interface ToolbarState {
-  rect: { top: number; left: number; width: number };
+  rect: { top: number; left: number };
   from: number;
   to: number;
 }
@@ -76,84 +87,120 @@ export function FormattingToolbar({
   const [state, setState] = useState<ToolbarState | null>(null);
   const [colorOpen, setColorOpen] = useState(false);
   const [sizeOpen, setSizeOpen] = useState(false);
-
+  // A ref mirror of state, so the mouseup handler (registered once, closure
+  // over stale state otherwise) can read the current toolbar offsets.
+  const stateRef = useRef<ToolbarState | null>(null);
   useEffect(() => {
-    function update() {
-      const root = editorRef.current?.getRoot();
-      if (!root) return setState(null);
-      const sel = document.getSelection();
-      if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
-        return setState(null);
-      }
-      const range = sel.getRangeAt(0);
-      if (
-        !root.contains(range.startContainer) ||
-        !root.contains(range.endContainer)
-      ) {
-        return setState(null);
-      }
-      const rect = range.getBoundingClientRect();
-      if (rect.width === 0 && rect.height === 0) return setState(null);
-      const saved = saveSelection(root);
-      if (!saved) return setState(null);
-      setState({
-        rect: { top: rect.top, left: rect.left + rect.width / 2, width: rect.width },
-        from: saved.start,
-        to: saved.end,
-      });
+    stateRef.current = state;
+  }, [state]);
+
+  const compute = useCallback((): ToolbarState | null => {
+    const root = editorRef.current?.getRoot();
+    if (!root) return null;
+    const sel = document.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null;
+    const range = sel.getRangeAt(0);
+    if (
+      !root.contains(range.startContainer) ||
+      !root.contains(range.endContainer)
+    ) {
+      return null;
     }
-    document.addEventListener("selectionchange", update);
-    window.addEventListener("scroll", update, true);
-    window.addEventListener("resize", update);
-    return () => {
-      document.removeEventListener("selectionchange", update);
-      window.removeEventListener("scroll", update, true);
-      window.removeEventListener("resize", update);
+    const rect = range.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return null;
+    const saved = saveSelection(root);
+    if (!saved || saved.start === saved.end) return null;
+    return {
+      rect: { top: rect.top, left: rect.left + rect.width / 2 },
+      from: saved.start,
+      to: saved.end,
     };
   }, [editorRef]);
+
+  useEffect(() => {
+    function insideToolbar(node: EventTarget | null): boolean {
+      return (
+        node instanceof Node &&
+        (node as HTMLElement).closest?.('[data-toolbar="1"]') != null
+      );
+    }
+
+    function onMouseDown(e: MouseEvent) {
+      // Clicks inside the toolbar don't dismiss it.
+      if (insideToolbar(e.target)) return;
+      setState(null);
+      setColorOpen(false);
+      setSizeOpen(false);
+    }
+    function onMouseUp() {
+      // Read selection on the next tick to let the browser finalize it.
+      setTimeout(() => setState(compute()), 0);
+    }
+    function onKeyUp(e: KeyboardEvent) {
+      // Show on shift-arrow completion; otherwise let selectionchange handle it.
+      if (e.shiftKey || e.key === "Shift") setState(compute());
+    }
+    function onSelectionChange() {
+      // Hide when selection collapses (typing).
+      const sel = document.getSelection();
+      if (!sel || sel.isCollapsed) {
+        // Only hide, don't try to show — showing during selectionchange caused
+        // the flicker we're now avoiding.
+        if (stateRef.current) setState(null);
+      }
+    }
+    document.addEventListener("mousedown", onMouseDown);
+    document.addEventListener("mouseup", onMouseUp);
+    document.addEventListener("keyup", onKeyUp);
+    document.addEventListener("selectionchange", onSelectionChange);
+    return () => {
+      document.removeEventListener("mousedown", onMouseDown);
+      document.removeEventListener("mouseup", onMouseUp);
+      document.removeEventListener("keyup", onKeyUp);
+      document.removeEventListener("selectionchange", onSelectionChange);
+    };
+  }, [compute]);
 
   if (!state) return null;
 
   function apply(mutator: (spanCopy: Record<string, unknown>) => void) {
-    if (!state) return;
-    const next = updateMarksInRange(content, state.from, state.to, (span) => {
+    const s = stateRef.current;
+    if (!s) return;
+    const next = updateMarksInRange(content, s.from, s.to, (span: Span) => {
       const copy: Record<string, unknown> = { ...span };
       mutator(copy);
-      return copy as unknown as typeof span;
+      return copy as unknown as Span;
     });
     onContentChange(next);
   }
 
   function toggleBoolean(mark: BooleanMark) {
-    if (!state) return;
-    const currentlyOn = rangeHasMark(content, state.from, state.to, mark);
-    apply((s) => {
-      if (currentlyOn) {
-        delete s[mark];
-      } else {
-        s[mark] = true;
-      }
+    const s = stateRef.current;
+    if (!s) return;
+    const currentlyOn = rangeHasMark(content, s.from, s.to, mark);
+    apply((span) => {
+      if (currentlyOn) delete span[mark];
+      else span[mark] = true;
     });
   }
 
   function setColor(color: Color | null) {
-    apply((s) => {
-      if (color === null) delete s.color;
-      else s.color = color;
+    apply((span) => {
+      if (color === null) delete span.color;
+      else span.color = color;
     });
     setColorOpen(false);
   }
 
   function setSize(size: Size | null) {
-    apply((s) => {
-      if (size === null) delete s.size;
-      else s.size = size;
+    apply((span) => {
+      if (size === null) delete span.size;
+      else span.size = size;
     });
     setSizeOpen(false);
   }
 
-  // Position: above the selection's top edge, centered horizontally on the
-  // selection midpoint. Clamped inside the viewport with a small padding.
+  // Position: centered above the selection's top edge, clamped to viewport.
   const TOOLBAR_HEIGHT = 40;
   const PADDING = 8;
   const top = Math.max(PADDING, state.rect.top - TOOLBAR_HEIGHT - 8);
@@ -161,8 +208,15 @@ export function FormattingToolbar({
 
   const toolbar = (
     <div
-      style={{ position: "fixed", top, left, transform: "translateX(-50%)", zIndex: 60 }}
-      onMouseDown={(e) => e.preventDefault()} // keep selection intact
+      data-toolbar="1"
+      style={{
+        position: "fixed",
+        top,
+        left,
+        transform: "translateX(-50%)",
+        zIndex: 60,
+        userSelect: "none",
+      }}
       className="flex items-center gap-0.5 h-9 px-1.5 rounded-lg border border-border bg-popover shadow-lg text-sm"
     >
       {BOOLEAN_MARKS.map((mark) => {
@@ -192,7 +246,10 @@ export function FormattingToolbar({
           <Palette className="size-4" />
         </ToolbarButton>
         {colorOpen && (
-          <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 flex items-center gap-1 p-1.5 rounded-lg border border-border bg-popover shadow-lg">
+          <div
+            data-toolbar="1"
+            className="absolute top-full left-1/2 -translate-x-1/2 mt-1 flex items-center gap-1 p-1.5 rounded-lg border border-border bg-popover shadow-lg"
+          >
             <ColorSwatch title="Default" swatch="var(--foreground)" onClick={() => setColor(null)} />
             {COLORS.map((c) => (
               <ColorSwatch
@@ -217,7 +274,10 @@ export function FormattingToolbar({
           <TypeIcon className="size-4" />
         </ToolbarButton>
         {sizeOpen && (
-          <div className="absolute top-full left-1/2 -translate-x-1/2 mt-1 flex flex-col p-1 rounded-lg border border-border bg-popover shadow-lg">
+          <div
+            data-toolbar="1"
+            className="absolute top-full left-1/2 -translate-x-1/2 mt-1 flex flex-col p-1 rounded-lg border border-border bg-popover shadow-lg"
+          >
             <SizePick label="Small" size="small" onClick={() => setSize("small")} />
             <SizePick label="Normal" size={null} onClick={() => setSize(null)} />
             <SizePick label="Large" size="large" onClick={() => setSize("large")} />
@@ -246,7 +306,11 @@ function ToolbarButton({
   return (
     <button
       type="button"
+      data-toolbar="1"
       title={title}
+      // Prevent the editor from losing focus / selection when the button is
+      // pressed — otherwise apply() would run against an empty selection.
+      onMouseDown={(e) => e.preventDefault()}
       onClick={onClick}
       className={cn(
         "flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors",
@@ -271,7 +335,9 @@ function ColorSwatch({
   return (
     <button
       type="button"
+      data-toolbar="1"
       title={title}
+      onMouseDown={(e) => e.preventDefault()}
       onClick={onClick}
       className="size-6 rounded-full border border-border hover:scale-110 transition-transform"
       style={{ background: swatch }}
@@ -292,6 +358,8 @@ function SizePick({
   return (
     <button
       type="button"
+      data-toolbar="1"
+      onMouseDown={(e) => e.preventDefault()}
       onClick={onClick}
       className={cn(
         "flex items-center gap-2 px-2 py-1 rounded-md text-sm hover:bg-accent",
@@ -306,8 +374,3 @@ function SizePick({
 function titleCase(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
-
-// Retain type import used indirectly by type-only comments above.
-void ({} as Partial<Record<BooleanMark | Color | Size, unknown>>);
-// keep SIZES import used by SizePick presets below (referenced in the pick list)
-void SIZES;

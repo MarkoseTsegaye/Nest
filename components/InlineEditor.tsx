@@ -53,7 +53,10 @@ export function InlineEditor({
   onBlur?: (final: BlockContent) => void;
   /** Called on Enter without shift — the parent decides what to do (add a new
    *  block, exit a list, etc). Return true to prevent default. */
-  onEnter?: () => boolean | void;
+  /** Fired on unmodified Enter — the parent decides what to do (create a
+   *  new block, pick a slash command). Enter is always preventDefault'd so
+   *  contentEditable can't sneak in a `<br>` or a `<div>` split. */
+  onEnter?: () => void;
   editorRef?: React.RefObject<InlineEditorHandle | null>;
   ariaLabel?: string;
   domId?: string;
@@ -108,11 +111,10 @@ export function InlineEditor({
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
       if (e.key === "Enter" && !e.shiftKey) {
-        // By default, contentEditable would insert a <br> or a new <div>.
-        // Neither is what a Notion-shaped block editor wants — either the
-        // parent handles it (new block below, exit list) or we just eat it.
-        const handled = onEnter?.();
-        if (handled !== false) e.preventDefault();
+        // contentEditable would otherwise insert a <br> or a new <div>. Let
+        // the parent decide what happens (create a new block, pick slash).
+        e.preventDefault();
+        onEnter?.();
       }
     },
     [onEnter]

@@ -11,6 +11,7 @@ import { DatabaseView } from "./DatabaseView";
 import { useDebouncedCallback } from "@/lib/use-debounced-callback";
 import { RecordActionProvider, usePageHistory } from "@/lib/use-page-history";
 import type { Action } from "@/lib/undo-redo";
+import { isEmptyContent } from "@/lib/block-content";
 import { cn } from "@/lib/utils";
 
 export function PageView({ pageId }: { pageId: string }) {
@@ -342,19 +343,35 @@ export function PageView({ pageId }: { pageId: string }) {
         ) : (
           <>
             <BlockEditor page={page} mutate={mutate} resync={resync} />
-            <div className="mt-12 pt-4 border-t border-border">
-              <button
-                onClick={makeDatabase}
-                className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-              >
-                <Table2 className="size-3.5" />
-                Turn into database
-              </button>
-            </div>
+            {/* Only surface "Turn into database" while the page is still
+                effectively empty (only the default text block, and it's blank)
+                — the affordance is confusing on a page with real notes on it. */}
+            {isEffectivelyEmpty(page) && (
+              <div className="mt-12 pt-4 border-t border-border">
+                <button
+                  onClick={makeDatabase}
+                  className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <Table2 className="size-3.5" />
+                  Turn into database
+                </button>
+              </div>
+            )}
           </>
         )}
       </RecordActionProvider>
     </div>
+  );
+}
+
+/**
+ * A page is "effectively empty" when it has no non-empty text/heading/list
+ * blocks and no page_link blocks. The default text block a fresh page ships
+ * with counts as empty as long as the user hasn't typed anything.
+ */
+function isEffectivelyEmpty(page: PageDetail): boolean {
+  return page.blocks.every(
+    (b) => b.type !== "page_link" && isEmptyContent(b.content ?? [])
   );
 }
 
