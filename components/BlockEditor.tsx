@@ -2,14 +2,7 @@
 
 import { useCallback, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import {
-  FileText,
-  Heading,
-  Link2,
-  Plus,
-  Trash2,
-  Type,
-} from "lucide-react";
+import { FileText, Link2, Plus, Trash2 } from "lucide-react";
 import { api } from "@/lib/api-client";
 import { usePages } from "@/lib/pages-context";
 import { newId } from "@/lib/id";
@@ -45,6 +38,10 @@ const blockFieldId = (id: string) => `block-field-${id}`;
 interface ConvertHint {
   type: Extract<BlockType, "text" | "heading" | "bulleted_list_item" | "numbered_list_item">;
   headingLevel?: number;
+  // When true, keep the existing block content (Backspace-revert of a heading
+  // or list back to plain text). When false/undefined, blank the content — the
+  // slash-command path, where "/h1" text needs to be wiped.
+  preserveContent?: boolean;
 }
 
 function classNameFor(block: Block): string {
@@ -78,16 +75,16 @@ function BlockRow({
   onDelete,
   onCommitContent,
   onConvert,
-  onInsertAfter,
-  onAddOfType,
+  onAddPageLinkAfter,
+  onBackspaceEmptyText,
 }: {
   block: Block;
   indexInList: number;
   onDelete: (block: Block) => void;
   onCommitContent: (id: string, content: BlockContent) => void;
   onConvert: (block: Block, next: ConvertHint) => void;
-  onInsertAfter: (afterBlock: Block) => void;
-  onAddOfType: (afterBlock: Block, type: "text" | "heading" | "page_link") => void;
+  onAddPageLinkAfter: (afterBlock: Block) => void;
+  onBackspaceEmptyText: (block: Block) => void;
 }) {
   const [content, setContent] = useState<BlockContent>(block.content ?? []);
   // Track the value at focus time so we record a single undo entry per edit
@@ -166,21 +163,38 @@ function BlockRow({
     requestAnimationFrame(() => editorRef.current?.focus());
   }
 
-  function handleEnter() {
+  // Return true to consume the Enter (slash pick). Otherwise the editor drops
+  // a soft <br> in this same block — no new block, no "/ for commands" ghost.
+  function handleEnter(): boolean {
     if (slashOpen) {
       const top = runSlashCommand(slashQuery, 1)[0];
       if (top) {
         pickSlash(top);
-        return;
+        return true;
       }
     }
-    onInsertAfter(block);
+    return false;
+  }
+
+  function handleBackspaceAtStart() {
+    if (
+      block.type === "heading" ||
+      block.type === "bulleted_list_item" ||
+      block.type === "numbered_list_item"
+    ) {
+      onConvert(block, { type: "text", preserveContent: true });
+      requestAnimationFrame(() => editorRef.current?.focus());
+      return;
+    }
+    if (block.type === "text" && contentToPlainText(content).length === 0) {
+      onBackspaceEmptyText(block);
+    }
   }
 
   if (block.type === "page_link") {
     return (
       <div className="group flex items-center gap-1 py-0.5 relative">
-        <GutterAdd onAdd={(t) => onAddOfType(block, t)} />
+        <GutterAdd onAdd={() => onAddPageLinkAfter(block)} />
         <Link
           href={`/pages/${block.linkedPageId}`}
           className="flex-1 flex items-center gap-2 rounded-md px-2.5 py-2 border border-border hover:bg-accent text-sm transition-colors"
@@ -207,7 +221,7 @@ function BlockRow({
 
   return (
     <div className="group relative flex items-start gap-1 py-0.5">
-      <GutterAdd onAdd={(t) => onAddOfType(block, t)} />
+      <GutterAdd onAdd={() => onAddPageLinkAfter(block)} />
       {marker(block.type, indexInList)}
       <InlineEditor
         domId={blockFieldId(block.id)}
@@ -219,6 +233,7 @@ function BlockRow({
         onFocus={handleFocus}
         onBlur={handleBlur}
         onEnter={handleEnter}
+        onBackspaceAtStart={handleBackspaceAtStart}
       />
       <button
         onClick={() => onDelete(block)}
@@ -244,18 +259,17 @@ function BlockRow({
   );
 }
 
-function GutterAdd({
-  onAdd,
-}: {
-  onAdd: (type: "text" | "heading" | "page_link") => void;
-}) {
+// Gutter "+" button: only offers Page link. Text / heading / lists are all
+// added through the slash menu inside the block itself — keeping this menu
+// tiny makes the block boundary feel like a solid unit, not a launcher.
+function GutterAdd({ onAdd }: { onAdd: () => void }) {
   return (
     <div className="absolute -left-8 top-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <button
             type="button"
-            title="Add block below"
+            title="Add page link below"
             className="flex size-6 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground"
             // Don't blur the currently-focused editor when opening.
             onMouseDown={(e) => e.preventDefault()}
@@ -264,15 +278,7 @@ function GutterAdd({
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start">
-          <DropdownMenuItem onSelect={() => onAdd("text")}>
-            <Type />
-            Text
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => onAdd("heading")}>
-            <Heading />
-            Heading
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => onAdd("page_link")}>
+          <DropdownMenuItem onSelect={onAdd}>
             <Link2 />
             Page link
           </DropdownMenuItem>
@@ -343,44 +349,20 @@ export function BlockEditor({
     }
   }
 
-  function insertBlockAt(
-    afterIndex: number,
-    type: "text" | "heading" | "page_link"
-  ): Block {
+  function addPageLinkAfter(afterBlock: Block) {
+    const afterIndex = page.blocks.findIndex((b) => b.id === afterBlock.id) + 1;
     const id = newId();
-    if (type === "page_link") {
-      const child = createPage({ parentId: page.id, title: "Untitled", persist: false });
-      const block: Block = {
-        id,
-        pageId: page.id,
-        type: "page_link",
-        order: afterIndex,
-        content: null,
-        headingLevel: null,
-        linkedPageId: child.id,
-        linkedPage: { id: child.id, title: child.title },
-      };
-      mutate((p) => {
-        const blocks = p.blocks.slice();
-        blocks.splice(afterIndex, 0, block);
-        return { ...p, blocks };
-      });
-      api
-        .createBlock(page.id, { id, type: "page_link", linkedPageId: child.id })
-        .catch(() => resync());
-      return block;
-    }
+    const child = createPage({ parentId: page.id, title: "Untitled", persist: false });
     const block: Block = {
       id,
       pageId: page.id,
-      type,
+      type: "page_link",
       order: afterIndex,
-      content: [],
-      headingLevel: type === "heading" ? 2 : null,
-      linkedPageId: null,
-      linkedPage: null,
+      content: null,
+      headingLevel: null,
+      linkedPageId: child.id,
+      linkedPage: { id: child.id, title: child.title },
     };
-    pendingFocus.current = id;
     mutate((p) => {
       const blocks = p.blocks.slice();
       blocks.splice(afterIndex, 0, block);
@@ -388,28 +370,8 @@ export function BlockEditor({
     });
     record({ kind: "create-block", block, index: afterIndex });
     api
-      .createBlock(page.id, {
-        id,
-        type,
-        content: [],
-        headingLevel: type === "heading" ? 2 : undefined,
-      })
+      .createBlock(page.id, { id, type: "page_link", linkedPageId: child.id })
       .catch(() => resync());
-    focusPending();
-    return block;
-  }
-
-  function insertBlockAfter(afterBlock: Block) {
-    const at = page.blocks.findIndex((b) => b.id === afterBlock.id) + 1;
-    insertBlockAt(at, "text");
-  }
-
-  function addOfType(
-    afterBlock: Block,
-    type: "text" | "heading" | "page_link"
-  ) {
-    const at = page.blocks.findIndex((b) => b.id === afterBlock.id) + 1;
-    insertBlockAt(at, type);
   }
 
   function deleteBlock(block: Block) {
@@ -417,6 +379,20 @@ export function BlockEditor({
     record({ kind: "delete-block", block, index });
     mutate((p) => ({ ...p, blocks: p.blocks.filter((b) => b.id !== block.id) }));
     api.deleteBlock(block.id).catch(() => resync());
+  }
+
+  // Backspace at the start of an empty text block: delete it and move focus
+  // to the previous block. If there IS no previous block we leave the block
+  // alone — the page always needs at least one editable target.
+  function backspaceEmptyText(block: Block) {
+    const index = page.blocks.findIndex((b) => b.id === block.id);
+    if (index <= 0) return;
+    const prev = page.blocks[index - 1];
+    deleteBlock(block);
+    if (prev.type !== "page_link") {
+      pendingFocus.current = prev.id;
+      focusPending();
+    }
   }
 
   const commitContent = useCallback(
@@ -430,6 +406,7 @@ export function BlockEditor({
   );
 
   function convertBlock(block: Block, next: ConvertHint) {
+    const headingLevel = next.type === "heading" ? next.headingLevel ?? 2 : null;
     mutate((p) => ({
       ...p,
       blocks: p.blocks.map((b) =>
@@ -437,8 +414,8 @@ export function BlockEditor({
           ? {
               ...b,
               type: next.type,
-              content: [],
-              headingLevel: next.type === "heading" ? next.headingLevel ?? 2 : null,
+              content: next.preserveContent ? b.content : [],
+              headingLevel,
             }
           : b
       ),
@@ -446,8 +423,8 @@ export function BlockEditor({
     api
       .updateBlock(block.id, {
         type: next.type,
-        content: [],
-        headingLevel: next.type === "heading" ? next.headingLevel ?? 2 : null,
+        ...(next.preserveContent ? {} : { content: [] }),
+        headingLevel,
       })
       .catch(() => resync());
   }
@@ -458,8 +435,8 @@ export function BlockEditor({
     onDelete: deleteBlock,
     onCommitContent: commitContent,
     onConvert: convertBlock,
-    onInsertAfter: insertBlockAfter,
-    onAddOfType: addOfType,
+    onAddPageLinkAfter: addPageLinkAfter,
+    onBackspaceEmptyText: backspaceEmptyText,
   };
 
   return (

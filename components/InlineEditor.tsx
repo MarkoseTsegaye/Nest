@@ -41,6 +41,7 @@ export function InlineEditor({
   onFocus,
   onBlur,
   onEnter,
+  onBackspaceAtStart,
   editorRef,
   ariaLabel,
   domId,
@@ -51,12 +52,15 @@ export function InlineEditor({
   onChange: (next: BlockContent) => void;
   onFocus?: () => void;
   onBlur?: (final: BlockContent) => void;
-  /** Called on Enter without shift — the parent decides what to do (add a new
-   *  block, exit a list, etc). Return true to prevent default. */
-  /** Fired on unmodified Enter — the parent decides what to do (create a
-   *  new block, pick a slash command). Enter is always preventDefault'd so
-   *  contentEditable can't sneak in a `<br>` or a `<div>` split. */
-  onEnter?: () => void;
+  /** Called on unmodified Enter. Return true to consume the event (e.g. a
+   *  slash-menu pick took precedence); otherwise the editor inserts a soft
+   *  line break (`<br>`) inside the current block. Enter is always
+   *  preventDefault'd so contentEditable can't sneak in its own split. */
+  onEnter?: () => boolean | void;
+  /** Called when Backspace is pressed with a collapsed selection at text
+   *  offset 0. The editor prevents the default so the parent can decide what
+   *  to do (revert a heading to text, delete an empty block, etc). */
+  onBackspaceAtStart?: () => void;
   editorRef?: React.RefObject<InlineEditorHandle | null>;
   ariaLabel?: string;
   domId?: string;
@@ -111,13 +115,31 @@ export function InlineEditor({
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
       if (e.key === "Enter" && !e.shiftKey) {
-        // contentEditable would otherwise insert a <br> or a new <div>. Let
-        // the parent decide what happens (create a new block, pick slash).
         e.preventDefault();
-        onEnter?.();
+        // Give the parent first crack — a slash-menu pick may consume the key.
+        if (onEnter?.()) return;
+        // Otherwise: soft line break inside this block.
+        document.execCommand("insertLineBreak");
+        return;
+      }
+      if (
+        e.key === "Backspace" &&
+        !e.shiftKey &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        onBackspaceAtStart
+      ) {
+        const el = rootRef.current;
+        if (!el) return;
+        const saved = saveSelection(el);
+        if (saved && saved.start === 0 && saved.end === 0) {
+          e.preventDefault();
+          onBackspaceAtStart();
+        }
       }
     },
-    [onEnter]
+    [onEnter, onBackspaceAtStart]
   );
 
   // Pasting rich HTML into a contentEditable would inject foreign markup —

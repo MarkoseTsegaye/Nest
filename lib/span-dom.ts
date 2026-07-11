@@ -32,8 +32,30 @@ function spanToElement(span: Span): HTMLSpanElement {
   if (span.code) el.dataset.code = "1";
   if (span.color) el.dataset.color = span.color;
   if (span.size) el.dataset.size = span.size;
-  el.textContent = span.text;
+  // Soft newlines render as <br> so contentEditable's caret behaves naturally
+  // across the break; span text stores them as "\n".
+  const parts = span.text.split("\n");
+  parts.forEach((part, i) => {
+    if (i > 0) el.appendChild(document.createElement("br"));
+    if (part) el.appendChild(document.createTextNode(part));
+  });
   return el;
+}
+
+// Depth-first text with <br> counted as "\n" — matches how the block's text
+// space is defined so offset math stays consistent.
+function collectText(el: HTMLElement): string {
+  let out = "";
+  for (const child of el.childNodes) {
+    if (child.nodeType === Node.TEXT_NODE) {
+      out += child.textContent ?? "";
+    } else if (child.nodeType === Node.ELEMENT_NODE) {
+      const e = child as HTMLElement;
+      if (e.tagName === "BR") out += "\n";
+      else out += collectText(e);
+    }
+  }
+  return out;
 }
 
 /** Read the editor's DOM back into a normalized BlockContent. */
@@ -45,9 +67,15 @@ export function readSpansFromDom(root: HTMLElement): BlockContent {
       if (text) out.push({ text });
     } else if (node.nodeType === Node.ELEMENT_NODE) {
       const el = node as HTMLElement;
-      // Browsers sometimes insert <br> when the editor is emptied.
-      if (el.tagName === "BR") continue;
-      const text = el.textContent ?? "";
+      if (el.tagName === "BR") {
+        // Root-level <br> = soft newline between spans (or a trailing one).
+        // Fold it into the last span so we don't invent a marks-less span.
+        const last = out[out.length - 1];
+        if (last) last.text += "\n";
+        else out.push({ text: "\n" });
+        continue;
+      }
+      const text = collectText(el);
       if (!text) continue;
       const span: Span = { text };
       if (el.dataset.bold === "1") span.bold = true;
@@ -63,6 +91,18 @@ export function readSpansFromDom(root: HTMLElement): BlockContent {
   return normalizeContent(out);
 }
 
+// One "character" of a DOM node's contribution to the text space: text nodes
+// count their length; <br> counts as one (the "\n"); anything else recurses.
+function nodeTextLength(node: Node): number {
+  if (node.nodeType === Node.TEXT_NODE) return (node.textContent ?? "").length;
+  if (node.nodeType !== Node.ELEMENT_NODE) return 0;
+  const el = node as HTMLElement;
+  if (el.tagName === "BR") return 1;
+  let acc = 0;
+  for (const c of el.childNodes) acc += nodeTextLength(c);
+  return acc;
+}
+
 /** Global (0..totalTextLength) offset of a Range endpoint under `root`. */
 function offsetOfPoint(root: HTMLElement, container: Node, offset: number): number {
   // If the range endpoint sits on an element (Node.ELEMENT_NODE), `offset`
@@ -70,7 +110,8 @@ function offsetOfPoint(root: HTMLElement, container: Node, offset: number): numb
   if (container.nodeType === Node.ELEMENT_NODE) {
     let acc = 0;
     for (let i = 0; i < offset; i++) {
-      acc += (container.childNodes[i]?.textContent ?? "").length;
+      const child = container.childNodes[i];
+      if (child) acc += nodeTextLength(child);
     }
     return sumTextBefore(root, container) + acc;
   }
@@ -79,12 +120,20 @@ function offsetOfPoint(root: HTMLElement, container: Node, offset: number): numb
 
 function sumTextBefore(root: HTMLElement, target: Node): number {
   let acc = 0;
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  // Walk elements too so we can count <br> as one char, matching "\n".
+  const walker = document.createTreeWalker(
+    root,
+    NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT
+  );
   let node: Node | null = walker.nextNode();
   while (node) {
     if (node === target) return acc;
-    if (target.contains(node)) return acc;
-    acc += (node.textContent ?? "").length;
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      if (target.contains(node)) return acc;
+      if ((node as Element).tagName === "BR") acc += 1;
+    } else {
+      acc += (node.textContent ?? "").length;
+    }
     node = walker.nextNode();
   }
   return acc;
@@ -132,15 +181,28 @@ function pointAt(
   root: HTMLElement,
   offset: number
 ): { node: Node; offset: number } | null {
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const walker = document.createTreeWalker(
+    root,
+    NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT
+  );
   let acc = 0;
   let node: Node | null = walker.nextNode();
   while (node) {
-    const len = (node.textContent ?? "").length;
-    if (acc + len >= offset) {
-      return { node, offset: offset - acc };
+    if (node.nodeType === Node.TEXT_NODE) {
+      const len = (node.textContent ?? "").length;
+      if (acc + len >= offset) {
+        return { node, offset: offset - acc };
+      }
+      acc += len;
+    } else if ((node as Element).tagName === "BR") {
+      // Caret at the newline == position AFTER the <br> in its parent.
+      if (acc === offset) {
+        const parent = node.parentNode!;
+        const idx = Array.prototype.indexOf.call(parent.childNodes, node);
+        return { node: parent, offset: idx + 1 };
+      }
+      acc += 1;
     }
-    acc += len;
     node = walker.nextNode();
   }
   // Beyond all text: place at end of root.
