@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ChevronLeft, Redo2, Table2, Undo2 } from "lucide-react";
+import { ChevronLeft, Network, Redo2, Table2, Undo2 } from "lucide-react";
 import { api } from "@/lib/api-client";
 import { usePages } from "@/lib/pages-context";
 import type { PageDetail, PropertyValue, RowPage } from "@/lib/types";
@@ -12,6 +12,7 @@ import { useDebouncedCallback } from "@/lib/use-debounced-callback";
 import { RecordActionProvider, usePageHistory } from "@/lib/use-page-history";
 import type { Action } from "@/lib/undo-redo";
 import { isEmptyContent } from "@/lib/block-content";
+import { useGraphSidebar } from "./GraphSidebar";
 import { cn } from "@/lib/utils";
 
 export function PageView({ pageId }: { pageId: string }) {
@@ -264,6 +265,7 @@ export function PageView({ pageId }: { pageId: string }) {
   );
 
   const history = usePageHistory(pageId, applyAction);
+  const { open: graphOpen, toggle: toggleGraph } = useGraphSidebar();
 
   // Global ⌘Z / Ctrl-Z (redo with Shift). Skip when the user is in an input or
   // textarea so native text undo still fixes typos inside a block or cell.
@@ -320,6 +322,21 @@ export function PageView({ pageId }: { pageId: string }) {
             disabled={!history.canRedo}
             icon={<Redo2 className="size-4" />}
           />
+          <button
+            type="button"
+            onClick={toggleGraph}
+            title="Toggle graph"
+            aria-label="Toggle graph"
+            aria-pressed={graphOpen}
+            className={cn(
+              "flex size-8 items-center justify-center rounded-md transition-colors",
+              "text-muted-foreground hover:bg-accent hover:text-foreground",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+              graphOpen && "bg-accent text-foreground"
+            )}
+          >
+            <Network className="size-4" />
+          </button>
         </div>
       </div>
 

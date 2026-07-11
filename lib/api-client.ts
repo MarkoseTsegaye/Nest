@@ -8,6 +8,7 @@ import type {
   PropertyValue,
 } from "./types";
 import type { BlockContent } from "./block-content";
+import type { GraphResponse } from "./graph-types";
 import type { SearchHit } from "./search";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -151,4 +152,7 @@ export const api = {
     request<SearchHit[]>(
       `/api/search?q=${encodeURIComponent(q)}&limit=${limit}`
     ),
+
+  getPageGraph: (id: string) =>
+    request<GraphResponse>(`/api/pages/${id}/graph`),
 };

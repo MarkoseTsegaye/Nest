@@ -68,6 +68,9 @@ model Block {
   updatedAt DateTime @updatedAt
 
   @@index([pageId])
+  // Speeds up the backlink query used by the page graph:
+  // `Block WHERE linkedPageId = X` runs on every page navigation.
+  @@index([linkedPageId])
 }
 
 enum PropertyType {

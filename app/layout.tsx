@@ -4,6 +4,7 @@ import { GeistMono } from "geist/font/mono";
 import "./globals.css";
 import { PagesProvider } from "@/lib/pages-context";
 import { Sidebar } from "@/components/Sidebar";
+import { GraphSidebar, GraphSidebarProvider } from "@/components/GraphSidebar";
 
 // Body & UI: Lexend is engineered to improve reading proficiency and reduce
 // reading fatigue — a natural fit for a note-taking app aimed at students.
@@ -38,10 +39,13 @@ export default function RootLayout({
     >
       <body className="h-full font-sans antialiased">
         <PagesProvider>
-          <div className="flex h-full">
-            <Sidebar />
-            <main className="flex-1 h-screen overflow-y-auto">{children}</main>
-          </div>
+          <GraphSidebarProvider>
+            <div className="flex h-full">
+              <Sidebar />
+              <main className="flex-1 h-screen overflow-y-auto">{children}</main>
+              <GraphSidebar />
+            </div>
+          </GraphSidebarProvider>
         </PagesProvider>
       </body>
     </html>
