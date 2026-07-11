@@ -4,7 +4,6 @@ import {
   Heading3,
   List,
   ListOrdered,
-  Type,
   type LucideIcon,
 } from "lucide-react";
 import type { BlockType } from "./types";
@@ -27,13 +26,15 @@ export interface SlashCommand {
   aliases?: string[];
 }
 
+// No "text" entry on purpose: text is the ground state, not a format. Blocks
+// return to text through explicit exits (Backspace at start, Enter on an
+// empty list item), never through the menu.
 export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "h1", label: "Heading 1", icon: Heading1, type: "heading", headingLevel: 1, aliases: ["heading1", "h1", "header1"] },
   { name: "h2", label: "Heading 2", icon: Heading2, type: "heading", headingLevel: 2, aliases: ["heading2", "h2", "header2"] },
   { name: "h3", label: "Heading 3", icon: Heading3, type: "heading", headingLevel: 3, aliases: ["heading3", "h3", "header3"] },
   { name: "bullet", label: "Bulleted list", icon: List, type: "bulleted_list_item", aliases: ["bulleted", "list", "ul", "bullets"] },
   { name: "numbered", label: "Numbered list", icon: ListOrdered, type: "numbered_list_item", aliases: ["number", "ordered", "ol", "num"] },
-  { name: "text", label: "Text", icon: Type, type: "text", aliases: ["plain", "paragraph", "p"] },
 ];
 
 /** Score how well `query` matches `candidate`. Higher = better. 0 = no match.
