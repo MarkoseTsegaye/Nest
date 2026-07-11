@@ -8,6 +8,7 @@ import { usePages } from "@/lib/pages-context";
 import { newId } from "@/lib/id";
 import {
   contentToPlainText,
+  isEmptyContent,
   serializeContent,
   type BlockContent,
 } from "@/lib/block-content";
@@ -77,6 +78,8 @@ function BlockRow({
   onConvert,
   onAddPageLinkAfter,
   onBackspaceEmptyText,
+  onInsertTextAfter,
+  onInsertListItemAfter,
 }: {
   block: Block;
   indexInList: number;
@@ -85,6 +88,11 @@ function BlockRow({
   onConvert: (block: Block, next: ConvertHint) => void;
   onAddPageLinkAfter: (afterBlock: Block) => void;
   onBackspaceEmptyText: (block: Block) => void;
+  onInsertTextAfter: (afterBlock: Block) => void;
+  onInsertListItemAfter: (
+    afterBlock: Block,
+    type: "bulleted_list_item" | "numbered_list_item"
+  ) => void;
 }) {
   const [content, setContent] = useState<BlockContent>(block.content ?? []);
   // Track the value at focus time so we record a single undo entry per edit
@@ -127,6 +135,13 @@ function BlockRow({
     } else if (slashOpen) {
       setSlashOpen(false);
     }
+    // Text is the ground state. Any time a formatted block ends up empty (e.g.
+    // ctrl-A + Backspace on a heading) revert it to text so the user isn't
+    // left staring at an empty "Heading" placeholder they can't type past.
+    // Idempotent once type has flipped to text.
+    if (isEmptyContent(next) && block.type !== "text") {
+      onConvert(block, { type: "text" });
+    }
   }
 
   function handleFocus() {
@@ -159,12 +174,24 @@ function BlockRow({
     setContent([]);
     editStartValue.current = [];
     onConvert(block, { type: cmd.type, headingLevel: cmd.headingLevel });
-    // Refocus the editor after conversion so the user can immediately type.
-    requestAnimationFrame(() => editorRef.current?.focus());
+    // Refocus after conversion so the user can immediately type. We look the
+    // element up by id instead of using editorRef because a single↔list group
+    // switch can remount InlineEditor and invalidate the ref between now and
+    // the rAF firing; the DOM id is stable across that remount.
+    requestAnimationFrame(() => {
+      document.getElementById(blockFieldId(block.id))?.focus();
+    });
   }
 
-  // Return true to consume the Enter (slash pick). Otherwise the editor drops
-  // a soft <br> in this same block — no new block, no "/ for commands" ghost.
+  // Return true to consume the Enter (parent handled it). Return false to let
+  // the editor drop a soft <br> inside this block — the plain-text default.
+  //
+  // Slash-menu pick wins first. Then the format-exit branches:
+  //   - heading  → new empty text block below (formats don't spill onto the
+  //                next line; text is the ground state).
+  //   - list     → non-empty: new list item of same type; empty item: convert
+  //                this block to text (Notion-style list exit).
+  //   - text     → return false, soft <br>.
   function handleEnter(): boolean {
     if (slashOpen) {
       const top = runSlashCommand(slashQuery, 1)[0];
@@ -172,6 +199,21 @@ function BlockRow({
         pickSlash(top);
         return true;
       }
+    }
+    if (block.type === "heading") {
+      onInsertTextAfter(block);
+      return true;
+    }
+    if (block.type === "bulleted_list_item" || block.type === "numbered_list_item") {
+      if (contentToPlainText(content).trim().length === 0) {
+        onConvert(block, { type: "text" });
+        requestAnimationFrame(() => {
+          document.getElementById(blockFieldId(block.id))?.focus();
+        });
+        return true;
+      }
+      onInsertListItemAfter(block, block.type);
+      return true;
     }
     return false;
   }
@@ -183,7 +225,9 @@ function BlockRow({
       block.type === "numbered_list_item"
     ) {
       onConvert(block, { type: "text", preserveContent: true });
-      requestAnimationFrame(() => editorRef.current?.focus());
+      requestAnimationFrame(() => {
+        document.getElementById(blockFieldId(block.id))?.focus();
+      });
       return;
     }
     if (block.type === "text" && contentToPlainText(content).length === 0) {
@@ -349,6 +393,51 @@ export function BlockEditor({
     }
   }
 
+  // Insert a fresh empty text / bulleted / numbered block at `index`, focus
+  // it, and mirror the write to the server. Used by Enter on heading (spawns
+  // a plain-text row) and Enter on a non-empty list item (continues the list),
+  // plus the "always at least one block" guard.
+  function insertBlockAt(
+    index: number,
+    type: "text" | "bulleted_list_item" | "numbered_list_item"
+  ) {
+    const id = newId();
+    const block: Block = {
+      id,
+      pageId: page.id,
+      type,
+      order: index,
+      content: [],
+      headingLevel: null,
+      linkedPageId: null,
+      linkedPage: null,
+    };
+    pendingFocus.current = id;
+    mutate((p) => {
+      const blocks = p.blocks.slice();
+      blocks.splice(index, 0, block);
+      return { ...p, blocks };
+    });
+    record({ kind: "create-block", block, index });
+    api
+      .createBlock(page.id, { id, type, content: [] })
+      .catch(() => resync());
+    focusPending();
+  }
+
+  function insertTextAfter(afterBlock: Block) {
+    const at = page.blocks.findIndex((b) => b.id === afterBlock.id) + 1;
+    insertBlockAt(at, "text");
+  }
+
+  function insertListItemAfter(
+    afterBlock: Block,
+    type: "bulleted_list_item" | "numbered_list_item"
+  ) {
+    const at = page.blocks.findIndex((b) => b.id === afterBlock.id) + 1;
+    insertBlockAt(at, type);
+  }
+
   function addPageLinkAfter(afterBlock: Block) {
     const afterIndex = page.blocks.findIndex((b) => b.id === afterBlock.id) + 1;
     const id = newId();
@@ -376,9 +465,13 @@ export function BlockEditor({
 
   function deleteBlock(block: Block) {
     const index = page.blocks.findIndex((b) => b.id === block.id);
+    const wasLast = page.blocks.length === 1;
     record({ kind: "delete-block", block, index });
     mutate((p) => ({ ...p, blocks: p.blocks.filter((b) => b.id !== block.id) }));
     api.deleteBlock(block.id).catch(() => resync());
+    // A page must always have somewhere to type — if this was the last block,
+    // spawn a fresh empty text row in its place.
+    if (wasLast) insertBlockAt(0, "text");
   }
 
   // Backspace at the start of an empty text block: delete it and move focus
@@ -437,27 +530,30 @@ export function BlockEditor({
     onConvert: convertBlock,
     onAddPageLinkAfter: addPageLinkAfter,
     onBackspaceEmptyText: backspaceEmptyText,
+    onInsertTextAfter: insertTextAfter,
+    onInsertListItemAfter: insertListItemAfter,
   };
 
   return (
     <div className="pl-8">
       <div className="space-y-0.5">
-        {groups.map((group, gi) =>
-          group.kind === "list" ? (
-            <div key={`list-${gi}`} className="pl-1">
-              {group.blocks.map((b, i) => (
+        {groups.map((group) => {
+          // Every group renders inside the same wrapper shape — a keyed <div>
+          // whose className varies. That way a text→list conversion doesn't
+          // change the React tree at this position, BlockRow stays mounted,
+          // and its InlineEditor keeps its editorRef / focus / selection.
+          const blocks = group.kind === "list" ? group.blocks : [group.block];
+          return (
+            <div
+              key={`group-${blocks[0].id}`}
+              className={group.kind === "list" ? "pl-1" : undefined}
+            >
+              {blocks.map((b, i) => (
                 <BlockRow key={b.id} block={b} indexInList={i} {...rowProps} />
               ))}
             </div>
-          ) : (
-            <BlockRow
-              key={group.block.id}
-              block={group.block}
-              indexInList={0}
-              {...rowProps}
-            />
-          )
-        )}
+          );
+        })}
       </div>
     </div>
   );

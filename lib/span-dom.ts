@@ -88,7 +88,16 @@ export function readSpansFromDom(root: HTMLElement): BlockContent {
       out.push(span);
     }
   }
+  // Chrome / Safari drop a placeholder <br> into an emptied contentEditable to
+  // keep it clickable. That reads back as a single `\n` — treat that specific
+  // shape as truly empty so isEmptyContent + auto-revert see the block as
+  // blank. Real "\n" content is always accompanied by neighbouring characters.
+  if (out.length === 1 && out[0].text === "\n" && !hasMarks(out[0])) return [];
   return normalizeContent(out);
+}
+
+function hasMarks(s: Span): boolean {
+  return !!(s.bold || s.italic || s.underline || s.strike || s.code || s.color || s.size);
 }
 
 // One "character" of a DOM node's contribution to the text space: text nodes
