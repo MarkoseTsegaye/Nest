@@ -37,6 +37,7 @@ export interface InlineEditorHandle {
 export function InlineEditor({
   content,
   placeholder,
+  persistentPlaceholder = false,
   className,
   onChange,
   onFocus,
@@ -50,6 +51,11 @@ export function InlineEditor({
 }: {
   content: BlockContent;
   placeholder?: string;
+  /** Show the placeholder even when the editor is not focused. Default is
+   *  Notion-style: an unfocused empty line renders clean, and the hint only
+   *  appears under the caret. Persistent is for empty headings ("Heading 1")
+   *  and the sole block of an empty page. */
+  persistentPlaceholder?: boolean;
   className?: string;
   onChange: (next: BlockContent) => void;
   onFocus?: () => void;
@@ -229,8 +235,11 @@ export function InlineEditor({
       onPaste={handlePaste}
       className={cn(
         "outline-none whitespace-pre-wrap break-words",
-        // Placeholder rendering via a CSS ::before that shows when empty.
-        "data-[empty=1]:before:content-[attr(data-placeholder)] data-[empty=1]:before:text-muted-foreground/40 data-[empty=1]:before:pointer-events-none",
+        // Placeholder via CSS ::before. Focus-gated by default (Notion-style:
+        // the hint follows the caret); persistent mode shows it whenever empty.
+        "data-[empty=1]:focus:before:content-[attr(data-placeholder)] data-[empty=1]:before:text-muted-foreground/40 data-[empty=1]:before:pointer-events-none",
+        persistentPlaceholder &&
+          "data-[empty=1]:before:content-[attr(data-placeholder)]",
         className
       )}
     />

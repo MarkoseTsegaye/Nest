@@ -136,6 +136,7 @@ interface BlockMarkdownSplit {
 function BlockRow({
   block,
   indexInList,
+  isOnlyBlock,
   onDelete,
   onCommitContent,
   onConvert,
@@ -147,6 +148,9 @@ function BlockRow({
 }: {
   block: Block;
   indexInList: number;
+  /** True when this is the page's sole block — an empty page keeps its hint
+   *  visible even unfocused so a fresh page isn't a blank void. */
+  isOnlyBlock: boolean;
   onDelete: (block: Block) => void;
   onCommitContent: (id: string, content: BlockContent) => void;
   onConvert: (block: Block, next: ConvertHint) => void;
@@ -262,13 +266,9 @@ function BlockRow({
     } else if (slashOpen) {
       setSlashOpen(false);
     }
-    // Text is the ground state. Any time a formatted block ends up empty (e.g.
-    // ctrl-A + Backspace on a heading) revert it to text so the user isn't
-    // left staring at an empty "Heading" placeholder they can't type past.
-    // Idempotent once type has flipped to text.
-    if (isEmptyContent(next) && block.type !== "text") {
-      onConvert(block, { type: "text" });
-    }
+    // Note: an emptied heading/list deliberately KEEPS its type (Notion
+    // behavior) — demotion to text happens only through explicit exits:
+    // Backspace at the start of the block, or Enter on an empty list item.
   }
 
   function handleFocus() {
@@ -295,6 +295,10 @@ function BlockRow({
 
   function pickSlash(cmd: SlashCommand) {
     setSlashOpen(false);
+    // A debounced save of the raw "/bullet" text may still be pending — cancel
+    // it, or it lands AFTER the conversion PATCH and resurrects the slash text
+    // on the server (visible on the next reload/resync).
+    debouncedSave.cancel();
     // Reset LOCAL editor state to empty so the "/h1" text disappears — without
     // this, the parent's mutate-to-empty is blocked by our render-time focus
     // guard (the editor is focused when the user clicks the menu).
@@ -409,12 +413,20 @@ function BlockRow({
     );
   }
 
+  // Placeholder policy (Notion parity):
+  //   - headings: persistent "Heading N" — an empty heading must stay visible.
+  //   - lists: "List", focus-only — the marker already shows the row exists.
+  //   - text: hint follows the caret, except the sole block of an empty page,
+  //     which keeps it persistently so a fresh page invites typing.
   const isHeading = block.type === "heading";
+  const isList =
+    block.type === "bulleted_list_item" || block.type === "numbered_list_item";
   const placeholder = isHeading
-    ? "Heading"
-    : block.type === "bulleted_list_item" || block.type === "numbered_list_item"
+    ? `Heading ${block.headingLevel ?? 2}`
+    : isList
     ? "List"
     : "Type '/' for commands…";
+  const persistentPlaceholder = isHeading || (isOnlyBlock && block.type === "text");
 
   return (
     <div className="group relative flex items-start py-0.5">
@@ -425,6 +437,7 @@ function BlockRow({
         editorRef={editorRef}
         content={content}
         placeholder={placeholder}
+        persistentPlaceholder={persistentPlaceholder}
         className={cn("flex-1 min-w-0", classNameFor(block))}
         onChange={handleChange}
         onFocus={handleFocus}
@@ -764,6 +777,7 @@ export function BlockEditor({
   const groups = useMemo(() => groupBlocks(page.blocks), [page.blocks]);
 
   const rowProps = {
+    isOnlyBlock: page.blocks.length === 1,
     onDelete: deleteBlock,
     onCommitContent: commitContent,
     onConvert: convertBlock,
