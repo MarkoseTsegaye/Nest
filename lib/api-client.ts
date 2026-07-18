@@ -9,6 +9,7 @@ import type {
 } from "./types";
 import type { BlockContent } from "./block-content";
 import type { SearchHit } from "./search";
+import type { GraphResponse } from "./graph-types";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
@@ -151,4 +152,6 @@ export const api = {
     request<SearchHit[]>(
       `/api/search?q=${encodeURIComponent(q)}&limit=${limit}`
     ),
+
+  getPageGraph: (id: string) => request<GraphResponse>(`/api/pages/${id}/graph`),
 };

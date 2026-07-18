@@ -68,6 +68,10 @@ model Block {
   updatedAt DateTime @updatedAt
 
   @@index([pageId])
+  // SQLite doesn't build an implicit index for foreign keys, so the backlink
+  // query used by the graph view (Block WHERE linkedPageId = ?) would scan the
+  // whole table on every navigation. This keeps it O(log n).
+  @@index([linkedPageId])
 }
 
 enum PropertyType {

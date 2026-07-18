@@ -172,7 +172,11 @@ export function restoreSelection(
   root: HTMLElement,
   saved: SavedSelection
 ): void {
-  const totalLen = (root.textContent ?? "").length;
+  // Use collectText, not textContent: the offset space counts each soft-newline
+  // <br> as one character, but textContent omits <br> entirely — clamping to
+  // textContent.length would truncate the caret by one per <br>, misplacing it
+  // in any block that contains soft newlines.
+  const totalLen = collectText(root).length;
   const start = Math.min(saved.start, totalLen);
   const end = Math.min(saved.end, totalLen);
   const startPos = pointAt(root, start);

@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ChevronLeft, Redo2, Table2, Undo2 } from "lucide-react";
+import { ChevronRight, Network, Redo2, Table2, Undo2 } from "lucide-react";
 import { api } from "@/lib/api-client";
 import { usePages } from "@/lib/pages-context";
 import type { PageDetail, PropertyValue, RowPage } from "@/lib/types";
@@ -10,6 +10,7 @@ import { BlockEditor } from "./BlockEditor";
 import { DatabaseView } from "./DatabaseView";
 import { useDebouncedCallback } from "@/lib/use-debounced-callback";
 import { RecordActionProvider, usePageHistory } from "@/lib/use-page-history";
+import { useGraphSidebar } from "./GraphSidebar";
 import type { Action } from "@/lib/undo-redo";
 import { isEmptyContent } from "@/lib/block-content";
 import { cn } from "@/lib/utils";
@@ -264,6 +265,7 @@ export function PageView({ pageId }: { pageId: string }) {
   );
 
   const history = usePageHistory(pageId, applyAction);
+  const graphSidebar = useGraphSidebar();
 
   // Global ⌘Z / Ctrl-Z (redo with Shift). Skip when the user is in an input or
   // textarea so native text undo still fixes typos inside a block or cell.
@@ -281,6 +283,23 @@ export function PageView({ pageId }: { pageId: string }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [history]);
 
+  // Full ancestor trail (root → immediate parent), walked up the sidebar tree
+  // by parentId. Mirrors Notion's breadcrumb rather than just the one parent.
+  // Computed before any early return so hook order stays stable.
+  const ancestors = useMemo(() => {
+    const trail: { id: string; title: string }[] = [];
+    const seen = new Set<string>();
+    let pid = page?.parentId ?? pages.find((p) => p.id === pageId)?.parentId ?? null;
+    while (pid && !seen.has(pid)) {
+      seen.add(pid);
+      const p = pages.find((x) => x.id === pid);
+      if (!p) break;
+      trail.unshift({ id: p.id, title: p.title });
+      pid = p.parentId;
+    }
+    return trail;
+  }, [pages, page?.parentId, pageId]);
+
   if (notFound) {
     return (
       <div className="p-16 text-muted-foreground">This page doesn&apos;t exist.</div>
@@ -289,19 +308,26 @@ export function PageView({ pageId }: { pageId: string }) {
 
   const isDatabase =
     page?.isDatabase ?? pages.find((p) => p.id === pageId)?.isDatabase ?? false;
-  const parent = page?.parent;
 
   return (
     <div className="max-w-3xl mx-auto px-16 py-14">
       <div className="flex items-start justify-between gap-2 mb-3">
-        {parent ? (
-          <Link
-            href={`/pages/${parent.id}`}
-            className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <ChevronLeft className="size-4" />
-            {parent.title || "Untitled"}
-          </Link>
+        {ancestors.length > 0 ? (
+          <nav className="flex items-center gap-1 text-sm text-muted-foreground min-w-0">
+            {ancestors.map((a, i) => (
+              <Fragment key={a.id}>
+                {i > 0 && (
+                  <ChevronRight className="size-3.5 shrink-0 opacity-50" />
+                )}
+                <Link
+                  href={`/pages/${a.id}`}
+                  className="truncate max-w-[12rem] hover:text-foreground transition-colors"
+                >
+                  {a.title || "Untitled"}
+                </Link>
+              </Fragment>
+            ))}
+          </nav>
         ) : (
           <div />
         )}
@@ -320,6 +346,21 @@ export function PageView({ pageId }: { pageId: string }) {
             disabled={!history.canRedo}
             icon={<Redo2 className="size-4" />}
           />
+          <button
+            type="button"
+            onClick={graphSidebar.toggle}
+            aria-pressed={graphSidebar.open}
+            title="Graph view"
+            aria-label="Toggle graph view"
+            className={cn(
+              "flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors",
+              "hover:bg-accent hover:text-foreground",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+              graphSidebar.open && "bg-accent text-foreground"
+            )}
+          >
+            <Network className="size-4" />
+          </button>
         </div>
       </div>
 

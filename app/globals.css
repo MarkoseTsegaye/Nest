@@ -187,4 +187,20 @@
 
   [data-size="small"] { font-size: 0.85em; }
   [data-size="large"] { font-size: 1.25em; }
+
+  /* Graph entrance — one coordinated settle when a page's map first paints or
+     re-centers after navigation. transform-box keeps the scale anchored to the
+     graph's own center rather than the SVG origin. */
+  .graph-enter {
+    transform-box: view-box;
+    transform-origin: center;
+    animation: graph-enter 0.5s cubic-bezier(0.22, 0.68, 0.28, 1) both;
+  }
+  @keyframes graph-enter {
+    from { opacity: 0; transform: scale(0.9); }
+    to   { opacity: 1; transform: scale(1); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .graph-enter { animation: none; }
+  }
 }

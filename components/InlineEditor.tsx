@@ -12,6 +12,7 @@ import {
   serializeContent,
   type BlockContent,
 } from "@/lib/block-content";
+import { applyInlineMarkdown, stripMarksInRange } from "@/lib/markdown-input";
 import { cn } from "@/lib/utils";
 
 /*
@@ -42,6 +43,7 @@ export function InlineEditor({
   onBlur,
   onEnter,
   onBackspaceAtStart,
+  onKeyNav,
   editorRef,
   ariaLabel,
   domId,
@@ -61,6 +63,10 @@ export function InlineEditor({
    *  offset 0. The editor prevents the default so the parent can decide what
    *  to do (revert a heading to text, delete an empty block, etc). */
   onBackspaceAtStart?: () => void;
+  /** Called for navigation keys while an overlay (e.g. the slash menu) is open.
+   *  Return true to consume the key — the editor then prevents its default so
+   *  the caret doesn't move and the browser doesn't scroll. */
+  onKeyNav?: (key: "ArrowUp" | "ArrowDown" | "Escape" | "Tab") => boolean;
   editorRef?: React.RefObject<InlineEditorHandle | null>;
   ariaLabel?: string;
   domId?: string;
@@ -70,6 +76,12 @@ export function InlineEditor({
   // redundant DOM repaints and to distinguish external-source updates from
   // our own emit-echo when React re-renders.
   const paintedRef = useRef<string>("");
+  // After an inline-markdown transform we drop the caret right after the newly
+  // styled run. contentEditable would then extend that run as the user keeps
+  // typing — but markdown formatting should end at the closing delimiter. We
+  // record the caret offset here and, on the very next input, strip marks off
+  // whatever was inserted so typing continues in plain text (Notion behavior).
+  const exitMarkAtRef = useRef<number | null>(null);
 
   // Expose focus + root access to parents (toolbar, block editor).
   useEffect(() => {
@@ -108,12 +120,56 @@ export function InlineEditor({
     const el = rootRef.current;
     if (!el) return;
     const spans = readSpansFromDom(el);
+    const sel = saveSelection(el);
+
+    // Exit-mark: the character(s) just typed right after a markdown transform
+    // inherited the styled run's marks — strip them so formatting stops at the
+    // closing delimiter. Only fires when the insertion is contiguous with the
+    // recorded caret; anything else clears the pending state harmlessly.
+    const exitAt = exitMarkAtRef.current;
+    exitMarkAtRef.current = null;
+    if (exitAt != null && sel && sel.start === sel.end && sel.start > exitAt) {
+      const stripped = stripMarksInRange(spans, exitAt, sel.start);
+      renderSpansToDom(el, stripped);
+      paintedRef.current = serializeContent(stripped);
+      restoreSelection(el, { start: sel.start, end: sel.start });
+      onChange(stripped);
+      return;
+    }
+
+    // Inline markdown: if the just-typed character completed a **bold** /
+    // *italic* / `code` / ~~strike~~ run, rewrite it in place, strip the
+    // delimiters, and drop the caret where the closing delimiter used to be.
+    if (sel && sel.start === sel.end) {
+      const md = applyInlineMarkdown(spans, sel.start);
+      if (md) {
+        renderSpansToDom(el, md.content);
+        paintedRef.current = serializeContent(md.content);
+        restoreSelection(el, { start: md.caret, end: md.caret });
+        exitMarkAtRef.current = md.caret;
+        onChange(md.content);
+        return;
+      }
+    }
     paintedRef.current = serializeContent(spans);
     onChange(spans);
   }, [onChange]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
+      // Overlay navigation (slash menu) gets first crack at arrows / Escape / Tab.
+      if (
+        onKeyNav &&
+        (e.key === "ArrowUp" ||
+          e.key === "ArrowDown" ||
+          e.key === "Escape" ||
+          e.key === "Tab")
+      ) {
+        if (onKeyNav(e.key)) {
+          e.preventDefault();
+          return;
+        }
+      }
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         // Give the parent first crack — a slash-menu pick may consume the key.
@@ -139,7 +195,7 @@ export function InlineEditor({
         }
       }
     },
-    [onEnter, onBackspaceAtStart]
+    [onEnter, onBackspaceAtStart, onKeyNav]
   );
 
   // Pasting rich HTML into a contentEditable would inject foreign markup —

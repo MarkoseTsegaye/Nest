@@ -9,9 +9,11 @@ import { newId } from "@/lib/id";
 import {
   contentToPlainText,
   isEmptyContent,
+  normalizeContent,
   serializeContent,
   type BlockContent,
 } from "@/lib/block-content";
+import { saveSelection } from "@/lib/span-dom";
 import { useDebouncedCallback } from "@/lib/use-debounced-callback";
 import { useRecordAction } from "@/lib/use-page-history";
 import { cn } from "@/lib/utils";
@@ -25,6 +27,7 @@ import type { Block, BlockType, PageDetail } from "@/lib/types";
 import { InlineEditor, type InlineEditorHandle } from "./InlineEditor";
 import { FormattingToolbar } from "./FormattingToolbar";
 import { runSlashCommand, type SlashCommand } from "@/lib/slash-commands";
+import { matchBlockMarkdown } from "@/lib/markdown-input";
 
 const headingClasses: Record<number, string> = {
   1: "font-display text-2xl font-bold tracking-tight",
@@ -43,6 +46,10 @@ interface ConvertHint {
   // or list back to plain text). When false/undefined, blank the content — the
   // slash-command path, where "/h1" text needs to be wiped.
   preserveContent?: boolean;
+  // Explicit replacement content. Used by markdown block shortcuts, which strip
+  // the "# " / "- " marker and keep whatever the user typed after it. Takes
+  // precedence over preserveContent.
+  content?: BlockContent;
 }
 
 function classNameFor(block: Block): string {
@@ -52,22 +59,78 @@ function classNameFor(block: Block): string {
   return "py-0.5 text-[15px] leading-relaxed";
 }
 
+/*
+ * List markers. Both bullet and number sit in the same fixed-width gutter so a
+ * list's text left-edge stays put regardless of marker. The glyph is vertically
+ * centered on the block's first text line (a line-box-height flex wrapper at the
+ * editor's 15px/leading-relaxed metrics, offset by the editor's py-0.5 top) so
+ * markers line up with the text instead of floating a hair high or low.
+ */
 function marker(type: BlockType, indexInList: number): React.ReactNode {
-  if (type === "bulleted_list_item") {
-    return (
-      <span className="pt-2 text-muted-foreground/70 shrink-0 w-4 text-center select-none">
-        •
+  if (type !== "bulleted_list_item" && type !== "numbered_list_item") return null;
+  return (
+    <span className="shrink-0 select-none w-7 pr-2 pt-0.5 text-[15px] flex justify-end">
+      <span className="flex h-[1.625em] items-center">
+        {type === "bulleted_list_item" ? (
+          <span className="block size-[5px] rounded-full bg-muted-foreground/70" />
+        ) : (
+          <span className="text-[13px] font-medium tabular-nums leading-none text-muted-foreground/60">
+            {indexInList + 1}.
+          </span>
+        )}
       </span>
-    );
+    </span>
+  );
+}
+
+/** True when a markdown block match resolves to the block's current type (and
+ *  heading level) — used to leave "## " inside an H2 (or "- " inside a bullet)
+ *  as literal text rather than re-converting to the same thing. */
+function isSameBlockShape(
+  match: { type: BlockType; headingLevel?: number },
+  block: Block
+): boolean {
+  if (match.type !== block.type) return false;
+  if (match.type === "heading") {
+    return (match.headingLevel ?? 2) === (block.headingLevel ?? 2);
   }
-  if (type === "numbered_list_item") {
-    return (
-      <span className="pt-1 text-muted-foreground/70 shrink-0 w-6 text-right pr-1 tabular-nums select-none">
-        {indexInList + 1}.
-      </span>
-    );
+  return true;
+}
+
+/** Slice a BlockContent by text offsets [from, to), preserving each run's marks. */
+function sliceContent(content: BlockContent, from: number, to: number): BlockContent {
+  const out: BlockContent = [];
+  let acc = 0;
+  for (const span of content) {
+    const s = acc;
+    const e = acc + span.text.length;
+    const a = Math.max(from, s);
+    const b = Math.min(to, e);
+    if (a < b) out.push({ ...span, text: span.text.slice(a - s, b - s) });
+    acc = e;
   }
-  return null;
+  return normalizeContent(out);
+}
+
+/*
+ * A line-level markdown conversion. The user typed a block marker at the start
+ * of one line inside a (possibly multi-line) block. We split that block around
+ * the line so the marked line becomes its own block of `target` type — the
+ * Notion move that lets you start a heading or list on any line, not just at the
+ * top of a block.
+ */
+interface BlockMarkdownSplit {
+  /** Content on the lines before the marked line (stays as the original block). */
+  before: BlockContent;
+  target: Extract<
+    BlockType,
+    "text" | "heading" | "bulleted_list_item" | "numbered_list_item"
+  >;
+  headingLevel?: number;
+  /** The marked line minus its marker (becomes the new `target` block). */
+  lineContent: BlockContent;
+  /** Content on the lines after the marked line (becomes a trailing text block). */
+  after: BlockContent;
 }
 
 function BlockRow({
@@ -80,6 +143,7 @@ function BlockRow({
   onBackspaceEmptyText,
   onInsertTextAfter,
   onInsertListItemAfter,
+  onBlockMarkdown,
 }: {
   block: Block;
   indexInList: number;
@@ -93,6 +157,7 @@ function BlockRow({
     afterBlock: Block,
     type: "bulleted_list_item" | "numbered_list_item"
   ) => void;
+  onBlockMarkdown: (block: Block, split: BlockMarkdownSplit) => void;
 }) {
   const [content, setContent] = useState<BlockContent>(block.content ?? []);
   // Track the value at focus time so we record a single undo entry per edit
@@ -102,6 +167,19 @@ function BlockRow({
   const editorRef = useRef<InlineEditorHandle | null>(null);
   const [slashOpen, setSlashOpen] = useState(false);
   const [slashQuery, setSlashQuery] = useState("");
+  const [slashIndex, setSlashIndex] = useState(0);
+  const slashResults = useMemo(
+    () => (slashOpen ? runSlashCommand(slashQuery, 8) : []),
+    [slashOpen, slashQuery]
+  );
+  // Reset the highlight to the top result whenever the query changes (Notion
+  // re-ranks on each keystroke, so the best match should be pre-selected). Done
+  // as a render-time reset rather than an effect to avoid a cascading render.
+  const [slashResetKey, setSlashResetKey] = useState(slashQuery);
+  if (slashResetKey !== slashQuery) {
+    setSlashResetKey(slashQuery);
+    setSlashIndex(0);
+  }
 
   // Sync local content when the parent mutates block.content from outside
   // (undo, redo, mark toggle) unless the user is currently typing here.
@@ -126,12 +204,61 @@ function BlockRow({
   function handleChange(next: BlockContent) {
     setContent(next);
     debouncedSave(next);
+
+    const plain = contentToPlainText(next);
+
+    // Block-level markdown: "# ", "## ", "- ", "1. " etc. at the start of the
+    // *current line* converts that line into its own block of the target type.
+    // Because Enter inserts a soft newline (one block can hold many lines), this
+    // is line-aware, not block-aware — so you can start a heading or list on any
+    // line anywhere in the doc, not only at the very top of a block. Skipped
+    // only when the marker maps to the block's current shape at the very start
+    // (typing "## " inside an existing H2, or "- " in a bullet, stays literal).
+    // Only a collapsed caret (i.e. active typing) can trigger conversion — this
+    // keeps toolbar mark-toggles and other range-selection edits from tripping
+    // it.
+    const root = editorRef.current?.getRoot();
+    const sel = root ? saveSelection(root) : null;
+    if (block.type !== "page_link" && sel && sel.start === sel.end) {
+      const caret = sel.start;
+      const lineStart = plain.lastIndexOf("\n", Math.max(0, caret - 1)) + 1;
+      const nl = plain.indexOf("\n", caret);
+      const lineEnd = nl === -1 ? plain.length : nl;
+      const line = plain.slice(lineStart, lineEnd);
+      const bm = matchBlockMarkdown(line);
+      const wholeBlockIsLine = lineStart === 0 && lineEnd === plain.length;
+      if (bm && !(wholeBlockIsLine && isSameBlockShape(bm, block))) {
+        debouncedSave.cancel();
+        setSlashOpen(false);
+        const markerLen = line.length - bm.rest.length; // marker + trailing space
+        // `before` excludes the newline that separates it from the marked line.
+        const before = lineStart > 0 ? sliceContent(next, 0, lineStart - 1) : [];
+        const lineContent = sliceContent(next, lineStart + markerLen, lineEnd);
+        // `after` skips the newline that follows the marked line.
+        const after =
+          lineEnd < plain.length ? sliceContent(next, lineEnd + 1, plain.length) : [];
+        // Update THIS row's local content to match what it becomes: the marked
+        // line's content when it converts in place (no head), else the head.
+        const localNext = isEmptyContent(before) ? lineContent : before;
+        setContent(localNext);
+        editStartValue.current = localNext;
+        onBlockMarkdown(block, {
+          before,
+          target: bm.type,
+          headingLevel: bm.headingLevel,
+          lineContent,
+          after,
+        });
+        return;
+      }
+    }
+
     // Slash detection: open menu when the whole block reads "/word" so
     // typing "and/or" in prose doesn't spring the menu.
-    const plain = contentToPlainText(next).trim();
-    if (/^\/[a-z0-9]*$/i.test(plain)) {
+    const trimmed = plain.trim();
+    if (/^\/[a-z0-9]*$/i.test(trimmed)) {
       setSlashOpen(true);
-      setSlashQuery(plain.slice(1).toLowerCase());
+      setSlashQuery(trimmed.slice(1).toLowerCase());
     } else if (slashOpen) {
       setSlashOpen(false);
     }
@@ -194,9 +321,9 @@ function BlockRow({
   //   - text     → return false, soft <br>.
   function handleEnter(): boolean {
     if (slashOpen) {
-      const top = runSlashCommand(slashQuery, 1)[0];
-      if (top) {
-        pickSlash(top);
+      const cmd = slashResults[slashIndex] ?? slashResults[0];
+      if (cmd) {
+        pickSlash(cmd);
         return true;
       }
     }
@@ -213,6 +340,32 @@ function BlockRow({
         return true;
       }
       onInsertListItemAfter(block, block.type);
+      return true;
+    }
+    return false;
+  }
+
+  // Slash-menu keyboard navigation. Returns true when the key was consumed so
+  // the editor suppresses its default (caret move / viewport scroll).
+  function handleKeyNav(
+    key: "ArrowUp" | "ArrowDown" | "Escape" | "Tab"
+  ): boolean {
+    if (!slashOpen || slashResults.length === 0) return false;
+    if (key === "Escape") {
+      setSlashOpen(false);
+      return true;
+    }
+    if (key === "ArrowDown") {
+      setSlashIndex((i) => (i + 1) % slashResults.length);
+      return true;
+    }
+    if (key === "ArrowUp") {
+      setSlashIndex((i) => (i - 1 + slashResults.length) % slashResults.length);
+      return true;
+    }
+    if (key === "Tab") {
+      const cmd = slashResults[slashIndex] ?? slashResults[0];
+      if (cmd) pickSlash(cmd);
       return true;
     }
     return false;
@@ -264,7 +417,7 @@ function BlockRow({
     : "Type '/' for commands…";
 
   return (
-    <div className="group relative flex items-start gap-1 py-0.5">
+    <div className="group relative flex items-start py-0.5">
       <GutterAdd onAdd={() => onAddPageLinkAfter(block)} />
       {marker(block.type, indexInList)}
       <InlineEditor
@@ -278,6 +431,7 @@ function BlockRow({
         onBlur={handleBlur}
         onEnter={handleEnter}
         onBackspaceAtStart={handleBackspaceAtStart}
+        onKeyNav={handleKeyNav}
       />
       <button
         onClick={() => onDelete(block)}
@@ -293,9 +447,11 @@ function BlockRow({
           onCommitContent(block.id, next);
         }}
       />
-      {slashOpen && (
+      {slashOpen && slashResults.length > 0 && (
         <SlashMenu
-          query={slashQuery}
+          results={slashResults}
+          activeIndex={slashIndex}
+          onHoverIndex={setSlashIndex}
           onPick={pickSlash}
         />
       )}
@@ -333,15 +489,16 @@ function GutterAdd({ onAdd }: { onAdd: () => void }) {
 }
 
 function SlashMenu({
-  query,
+  results,
+  activeIndex,
+  onHoverIndex,
   onPick,
 }: {
-  query: string;
+  results: SlashCommand[];
+  activeIndex: number;
+  onHoverIndex: (i: number) => void;
   onPick: (cmd: SlashCommand) => void;
 }) {
-  const results = useMemo(() => runSlashCommand(query, 8), [query]);
-  if (results.length === 0) return null;
-
   return (
     <div
       // Keep clicks from blurring the editor — otherwise the blur handler
@@ -354,11 +511,11 @@ function SlashMenu({
           key={r.name}
           type="button"
           onClick={() => onPick(r)}
-          data-first={i === 0 ? "1" : undefined}
+          onMouseEnter={() => onHoverIndex(i)}
           className={cn(
             "w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-left",
-            "hover:bg-accent focus-visible:bg-accent outline-none",
-            i === 0 && "bg-accent/50"
+            "outline-none transition-colors",
+            i === activeIndex ? "bg-accent text-foreground" : "text-foreground/90"
           )}
         >
           <r.icon className="size-4 text-muted-foreground" />
@@ -423,6 +580,87 @@ export function BlockEditor({
       .createBlock(page.id, { id, type, content: [] })
       .catch(() => resync());
     focusPending();
+  }
+
+  // Insert a block with explicit type / content / heading level at `index`.
+  // Optionally take focus. Returns the new block's id.
+  function insertBlockWith(
+    index: number,
+    type: Exclude<BlockType, "page_link">,
+    content: BlockContent,
+    headingLevel: number | null,
+    focus: boolean
+  ): string {
+    const id = newId();
+    const block: Block = {
+      id,
+      pageId: page.id,
+      type,
+      order: index,
+      content,
+      headingLevel,
+      linkedPageId: null,
+      linkedPage: null,
+    };
+    if (focus) pendingFocus.current = id;
+    mutate((p) => {
+      const blocks = p.blocks.slice();
+      blocks.splice(index, 0, block);
+      return { ...p, blocks };
+    });
+    record({ kind: "create-block", block, index });
+    api
+      .createBlock(page.id, {
+        id,
+        type,
+        content,
+        headingLevel: headingLevel ?? undefined,
+      })
+      .catch(() => resync());
+    if (focus) focusPending();
+    return id;
+  }
+
+  // Apply a line-level markdown conversion: split the block around the marked
+  // line so that line becomes its own block of the target type. Handles the
+  // common "empty line at the end" case (plain in-place convert) up through a
+  // marker on a middle line (keep the head, spin out the marked line, and drop
+  // the tail into a trailing text block).
+  function applyBlockMarkdown(block: Block, split: BlockMarkdownSplit) {
+    const index = page.blocks.findIndex((b) => b.id === block.id);
+    const beforeEmpty = isEmptyContent(split.before);
+    const afterEmpty = isEmptyContent(split.after);
+
+    if (beforeEmpty) {
+      // The marked line is the block's first line — convert this block in place.
+      convertBlock(block, {
+        type: split.target,
+        headingLevel: split.headingLevel,
+        content: split.lineContent,
+      });
+      if (!afterEmpty) {
+        insertBlockWith(index + 1, "text", split.after, null, false);
+      }
+      requestAnimationFrame(() => {
+        document.getElementById(blockFieldId(block.id))?.focus();
+      });
+      return;
+    }
+
+    // Marker sits below other text: keep the head as the original block, spin
+    // the marked line out into a new target block (focused), then any tail.
+    commitContent(block.id, split.before);
+    api.updateBlock(block.id, { content: split.before }).catch(() => resync());
+    insertBlockWith(
+      index + 1,
+      split.target,
+      split.lineContent,
+      split.target === "heading" ? split.headingLevel ?? 2 : null,
+      true
+    );
+    if (!afterEmpty) {
+      insertBlockWith(index + 2, "text", split.after, null, false);
+    }
   }
 
   function insertTextAfter(afterBlock: Block) {
@@ -500,23 +738,24 @@ export function BlockEditor({
 
   function convertBlock(block: Block, next: ConvertHint) {
     const headingLevel = next.type === "heading" ? next.headingLevel ?? 2 : null;
+    const explicit = next.content !== undefined;
     mutate((p) => ({
       ...p,
-      blocks: p.blocks.map((b) =>
-        b.id === block.id
-          ? {
-              ...b,
-              type: next.type,
-              content: next.preserveContent ? b.content : [],
-              headingLevel,
-            }
-          : b
-      ),
+      blocks: p.blocks.map((b) => {
+        if (b.id !== block.id) return b;
+        const content = explicit ? next.content! : next.preserveContent ? b.content : [];
+        return { ...b, type: next.type, content, headingLevel };
+      }),
     }));
+    const apiContent = explicit
+      ? next.content!
+      : next.preserveContent
+      ? undefined
+      : [];
     api
       .updateBlock(block.id, {
         type: next.type,
-        ...(next.preserveContent ? {} : { content: [] }),
+        ...(apiContent !== undefined ? { content: apiContent } : {}),
         headingLevel,
       })
       .catch(() => resync());
@@ -532,6 +771,7 @@ export function BlockEditor({
     onBackspaceEmptyText: backspaceEmptyText,
     onInsertTextAfter: insertTextAfter,
     onInsertListItemAfter: insertListItemAfter,
+    onBlockMarkdown: applyBlockMarkdown,
   };
 
   return (
