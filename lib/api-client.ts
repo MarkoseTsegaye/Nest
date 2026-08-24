@@ -7,7 +7,9 @@ import type {
   PropertyType,
   PropertyValue,
 } from "./types";
+import type { BlockContent } from "./block-content";
 import type { SearchHit } from "./search";
+import type { GraphResponse } from "./graph-types";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
@@ -55,12 +57,21 @@ export const api = {
 
   getPage: (id: string) => request<PageDetail>(`/api/pages/${id}`),
 
-  createPage: (data: { id?: string; title?: string; parentId?: string }) => {
+  createPage: (data: {
+    id?: string;
+    title?: string;
+    parentId?: string;
+    defaultBlockId?: string;
+  }) => {
     // A child page can't be created before its parent exists.
     const promise = afterCreate(data.parentId).then(() =>
       request<PageSummary>("/api/pages", { method: "POST", body: JSON.stringify(data) })
     );
-    return track(data.id, promise);
+    track(data.id, promise);
+    // The server also creates a default text block; track it so any dependent
+    // block write (e.g. its very first edit) waits for the create to land.
+    if (data.defaultBlockId) track(data.defaultBlockId, promise);
+    return promise;
   },
 
   updatePage: (id: string, data: { title?: string; isDatabase?: boolean }) =>
@@ -73,7 +84,13 @@ export const api = {
 
   createBlock: (
     pageId: string,
-    data: { id?: string; type: BlockType; content?: string; headingLevel?: number; linkedPageId?: string }
+    data: {
+      id?: string;
+      type: BlockType;
+      content?: BlockContent;
+      headingLevel?: number;
+      linkedPageId?: string;
+    }
   ) => {
     const promise = afterCreate(pageId).then(() =>
       request<Block>(`/api/pages/${pageId}/blocks`, { method: "POST", body: JSON.stringify(data) })
@@ -85,7 +102,15 @@ export const api = {
     return promise;
   },
 
-  updateBlock: (id: string, data: { content?: string; headingLevel?: number | null; order?: number }) =>
+  updateBlock: (
+    id: string,
+    data: {
+      type?: Exclude<BlockType, "page_link">;
+      content?: BlockContent;
+      headingLevel?: number | null;
+      order?: number;
+    }
+  ) =>
     afterCreate(id).then(() =>
       request<Block>(`/api/blocks/${id}`, { method: "PATCH", body: JSON.stringify(data) })
     ),
@@ -127,4 +152,6 @@ export const api = {
     request<SearchHit[]>(
       `/api/search?q=${encodeURIComponent(q)}&limit=${limit}`
     ),
+
+  getPageGraph: (id: string) => request<GraphResponse>(`/api/pages/${id}/graph`),
 };

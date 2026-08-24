@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { errorResponse } from "@/lib/api-error";
+import { parseContent } from "@/lib/block-content";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -24,7 +25,16 @@ export async function GET(_request: NextRequest, { params }: Params) {
         },
       },
     });
-    return NextResponse.json(page);
+    // Blocks store `content` as a JSON string on disk; parse to Span[] before
+    // sending so the client works with the typed shape everywhere.
+    const shaped = {
+      ...page,
+      blocks: page.blocks.map((b) => ({
+        ...b,
+        content: b.type === "page_link" ? null : parseContent(b.content),
+      })),
+    };
+    return NextResponse.json(shaped);
   } catch (error) {
     return errorResponse(error);
   }

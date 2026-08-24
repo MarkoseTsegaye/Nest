@@ -1,3 +1,4 @@
+import type { BlockContent } from "./block-content";
 import type { Block } from "./types";
 
 /*
@@ -23,12 +24,13 @@ import type { Block } from "./types";
  * that's not event-sourcing but survives concurrent optimistic edits.
  */
 
-/** A block's text content was edited from `before` to `after`. */
+/** A block's inline content was edited from `before` to `after`. Carries the
+ *  full Span[] on each side so undo/redo is a straight swap — no re-derivation. */
 export interface EditBlockContentAction {
   kind: "edit-block-content";
   blockId: string;
-  before: string;
-  after: string;
+  before: BlockContent;
+  after: BlockContent;
 }
 
 /**
